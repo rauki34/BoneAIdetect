@@ -1,0 +1,61 @@
+:root {
+  --font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
+  --primary: #4f6ef7;
+
+  font-family: var(--font-family);
+  line-height: 1.5;
+
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+a {
+  font-weight: 500;
+  color: var(--primary);
+  text-decoration: none;
+}
+a:hover { color: #3350d6; }
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  height: auto;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1 { font-size: 2.4em; line-height: 1.1; margin:0 0 12px 0 }
+
+button { font-family: inherit }
+
+#app {
+  width: 100%;
+  min-height: 100vh;
+  height: auto;
+  margin: 0;
+  padding: 0;
+  text-align: left;
+}
+
+/* small helpers */
+.center { display:flex; align-items:center; justify-content:center }
+
+/* 暗色模式下的表格固定列修复 */
+html.dark .el-table__fixed-right,
+html.dark .el-table__fixed-left {
+  background-color: var(--el-bg-color) !important;
+}
+
+html.dark .el-table__fixed-right .el-table__fixed-header-wrapper,
+html.dark .el-table__fixed-right .el-table__fixed-body-wrapper,
+html.dark .el-table__fixed-left .el-table__fixed-header-wrapper,
+html.dark .el-table__fixed-left .el-table__fixed-body-wrapper {
+  background-color: var(--el-bg-color) !important;
+}
+
+html.dark .el-table__fixed-right th.el-table__cell,
+html.dark .el-table__fixed-right td.el-table__cell,
+html.dark .el-table__fixed-left th.el-table__cell,
+html.dark .el-table__fixed-left td.el-table__cell {
+  background-color: var(--el-bg-color) !important;
+}

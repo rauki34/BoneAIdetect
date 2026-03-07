@@ -1,0 +1,23 @@
+{
+  "name": "bone-detection-frontend",
+  "version": "1.0.0",
+  "description": "医学骨折检测分析系统 - 前端",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "vue": "^3.4.31",
+    "vue-router": "^4.4.0",
+    "element-plus": "^2.7.6",
+    "axios": "^1.7.2",
+    "@antv/g2plot": "^2.4.31",
+    "@element-plus/icons-vue": "^2.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.0.5",
+    "vite": "^5.3.3"
+  }
+}
