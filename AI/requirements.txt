@@ -1,0 +1,23 @@
+# AI Service Requirements
+# Python 3.11+
+# CUDA 11.8+ recommended for GPU acceleration
+
+# Web Framework
+Flask==3.0.3
+
+# Deep Learning Framework
+torch==2.3.1
+torchvision==0.18.1
+
+# Transformers & Model Loading
+transformers==4.42.4
+accelerate==0.32.1
+
+# Quantization
+bitsandbytes==0.43.1
+
+# Image Processing
+Pillow==10.4.0
+
+# Utilities
+numpy==1.26.4
