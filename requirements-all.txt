@@ -1,0 +1,45 @@
+# 医学骨折检测分析系统 - 完整依赖清单
+# 包含 Backend + AI Service 的所有依赖
+# Python 3.11+
+
+# ==================== Web Framework ====================
+Flask==3.0.3
+Flask-SQLAlchemy==3.1.1
+Flask-Migrate==4.0.7
+Flask-CORS==4.0.1
+Werkzeug==3.0.3
+
+# ==================== Database ====================
+SQLAlchemy==2.0.31
+alembic==1.13.2
+
+# ==================== YOLO Detection ====================
+ultralytics==8.2.58
+
+# ==================== Deep Learning (AI Service) ====================
+torch==2.3.1
+torchvision==0.18.1
+transformers==4.42.4
+accelerate==0.32.1
+bitsandbytes==0.43.1
+
+# ==================== Image Processing ====================
+opencv-python==4.10.0.84
+Pillow==10.4.0
+
+# ==================== Utilities ====================
+numpy==1.26.4
+python-dateutil==2.9.0
+
+# ==================== 安装说明 ====================
+# 1. 建议先安装 PyTorch (根据你的CUDA版本选择)
+#    CUDA 11.8: pip install torch==2.3.1 torchvision==0.18.1 --index-url https://download.pytorch.org/whl/cu118
+#    CUDA 12.1: pip install torch==2.3.1 torchvision==0.18.1 --index-url https://download.pytorch.org/whl/cu121
+#    CPU only:  pip install torch==2.3.1 torchvision==0.18.1 --index-url https://download.pytorch.org/whl/cpu
+#
+# 2. 安装其他依赖
+#    pip install -r requirements-all.txt
+#
+# 3. 前端依赖 (需要Node.js 18+)
+#    cd frontend
+#    npm install
