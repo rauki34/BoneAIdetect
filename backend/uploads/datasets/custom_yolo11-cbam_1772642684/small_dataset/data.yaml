@@ -1,0 +1,6 @@
+train: ./train/images
+val: ./val/images
+test: ./test/images
+
+nc: 11
+names: ['Avlusion Fracture', 'Comminuted Fracture', 'Compression-Crush Fracutre', 'Fracture Dislocation', 'GreenStick Fracture', 'HairLine Fracture', 'Impact Fracture', 'Intra-articular fracture', 'Null', 'Oblique fracture', 'spiral fracture']

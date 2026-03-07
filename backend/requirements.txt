@@ -1,0 +1,25 @@
+# Backend Requirements
+# Python 3.11+
+
+# Web Framework
+Flask==3.0.3
+Flask-SQLAlchemy==3.1.1
+Flask-Migrate==4.0.7
+Flask-CORS==4.0.1
+Werkzeug==3.0.3
+flask-sock==0.7.0
+
+# Database
+SQLAlchemy==2.0.31
+alembic==1.13.2
+
+# YOLO Detection
+ultralytics==8.2.58
+
+# Image Processing
+opencv-python==4.10.0.84
+Pillow==10.4.0
+
+# Utilities
+numpy==1.26.4
+python-dateutil==2.9.0
