@@ -23,3 +23,6 @@ Pillow==10.4.0
 # Utilities
 numpy==1.26.4
 python-dateutil==2.9.0
+
+# Simple Websocket Server (for video stream detection)
+simple-websocket-server==0.4.2

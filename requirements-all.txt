@@ -8,6 +8,7 @@ Flask-SQLAlchemy==3.1.1
 Flask-Migrate==4.0.7
 Flask-CORS==4.0.1
 Werkzeug==3.0.3
+flask-sock==0.7.0
 
 # ==================== Database ====================
 SQLAlchemy==2.0.31
@@ -27,6 +28,9 @@ bitsandbytes==0.43.1
 opencv-python==4.10.0.84
 Pillow==10.4.0
 
+# ==================== WebSocket ====================
+simple-websocket-server==0.4.2
+
 # ==================== Utilities ====================
 numpy==1.26.4
 python-dateutil==2.9.0
@@ -37,9 +41,17 @@ python-dateutil==2.9.0
 #    CUDA 12.1: pip install torch==2.3.1 torchvision==0.18.1 --index-url https://download.pytorch.org/whl/cu121
 #    CPU only:  pip install torch==2.3.1 torchvision==0.18.1 --index-url https://download.pytorch.org/whl/cpu
 #
-# 2. 安装其他依赖
+# 2. 安装后端依赖
+#    cd backend
+#    pip install -r requirements.txt
+#
+# 3. 安装AI服务依赖
+#    cd AI
+#    pip install -r requirements.txt
+#
+# 4. 或者一次性安装所有依赖
 #    pip install -r requirements-all.txt
 #
-# 3. 前端依赖 (需要Node.js 18+)
+# 5. 前端依赖 (需要Node.js 18+)
 #    cd frontend
 #    npm install
