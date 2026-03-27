@@ -19,8 +19,13 @@
         :router="false"
       >
         <el-menu-item index="detect">
+          <el-icon><HomeFilled /></el-icon>
+          <template #title>首页</template>
+        </el-menu-item>
+
+        <el-menu-item index="image">
           <el-icon><Picture /></el-icon>
-          <template #title>开始检测</template>
+          <template #title>图片检测</template>
         </el-menu-item>
 
         <el-menu-item index="video">
@@ -115,8 +120,180 @@
 
       <!-- 内容主体 -->
       <el-main class="main-content">
-        <!-- 检测页面 -->
+        <!-- 首页 -->
         <div v-if="activeMenu === 'detect'" class="content-section">
+          <div class="dashboard-container">
+            <!-- 顶部欢迎区域 -->
+            <div class="dashboard-header">
+              <div class="header-content">
+                <h1 class="dashboard-title">
+                  <span class="title-icon">🏥</span>
+                  {{ isAdmin ? '骨折智能检测分析系统' : '我的检测分析' }}
+                </h1>
+                <p class="dashboard-subtitle">
+                  {{ isAdmin ? '基于深度学习的医学影像智能分析平台，为骨科医生提供精准辅助诊断' : '您的个人检测历史和分析数据' }}
+                </p>
+                <div class="header-stats">
+                  <div class="stat-item">
+                    <div class="stat-value">{{ isAdmin ? analysis.total_detections : userAnalysis.total_detections }}</div>
+                    <div class="stat-label">{{ isAdmin ? '总检测次数' : '我的检测次数' }}</div>
+                  </div>
+                  <div class="stat-item">
+                    <div class="stat-value">{{ isAdmin ? Object.keys(analysis.models_used).length : Object.keys(userAnalysis.models_used).length }}</div>
+                    <div class="stat-label">已用模型数</div>
+                  </div>
+                  <div class="stat-item">
+                    <div class="stat-value">{{ isAdmin ? Object.keys(analysis.classes_detected).length : Object.keys(userAnalysis.classes_detected).length }}</div>
+                    <div class="stat-label">检测类别数</div>
+                  </div>
+                  <div class="stat-item">
+                    <div class="stat-value">{{ ((isAdmin ? analysis.avg_confidence : userAnalysis.avg_confidence) * 100).toFixed(1) }}%</div>
+                    <div class="stat-label">平均置信度</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 功能模块快捷入口 -->
+            <div class="quick-access">
+              <h2 class="section-title">功能模块</h2>
+              <div class="module-grid">
+                <div class="module-card" @click="navigateTo('detect')">
+                  <div class="module-icon detection-icon">
+                    <el-icon><Picture /></el-icon>
+                  </div>
+                  <h3 class="module-title">图片检测</h3>
+                  <p class="module-desc">上传X光片进行骨折检测</p>
+                </div>
+                <div class="module-card" @click="navigateTo('video')">
+                  <div class="module-icon video-icon">
+                    <el-icon><VideoCamera /></el-icon>
+                  </div>
+                  <h3 class="module-title">视频检测</h3>
+                  <p class="module-desc">分析视频流中的骨折情况</p>
+                </div>
+                <div class="module-card" @click="navigateTo('camera')">
+                  <div class="module-icon camera-icon">
+                    <el-icon><Camera /></el-icon>
+                  </div>
+                  <h3 class="module-title">摄像头检测</h3>
+                  <p class="module-desc">实时摄像头骨折检测</p>
+                </div>
+                <div class="module-card" @click="navigateTo('training')" v-if="isAdmin">
+                  <div class="module-icon training-icon">
+                    <el-icon><MagicStick /></el-icon>
+                  </div>
+                  <h3 class="module-title">模型训练</h3>
+                  <p class="module-desc">训练和管理自定义模型</p>
+                </div>
+              </div>
+            </div>
+
+            <!-- 数字化智能大屏 -->
+            <div class="dashboard-grid">
+              <!-- 左侧：系统状态 -->
+              <div class="dashboard-card">
+                <h3 class="card-title">
+                  <el-icon><Monitor /></el-icon>
+                  系统状态
+                </h3>
+                <div class="system-status">
+                  <div class="status-item">
+                    <div class="status-label">服务状态</div>
+                    <div class="status-value online">运行中</div>
+                  </div>
+                  <div class="status-item">
+                    <div class="status-label">模型加载</div>
+                    <div class="status-value">
+                      {{ Object.keys(models).length }}/3
+                    </div>
+                  </div>
+                  <div class="status-item">
+                    <div class="status-label">存储空间</div>
+                    <div class="status-value">
+                      <el-progress :percentage="75" :stroke-width="10" />
+                    </div>
+                  </div>
+                  <div class="status-item">
+                    <div class="status-label">系统负载</div>
+                    <div class="status-value">
+                      <el-progress :percentage="45" :stroke-width="10" color="#409EFF" />
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 中间：最近检测记录 -->
+              <div class="dashboard-card">
+                <h3 class="card-title">
+                  <el-icon><Clock /></el-icon>
+                  {{ isAdmin ? '最近检测' : '我的最近检测' }}
+                </h3>
+                <div class="recent-history">
+                  <el-table :data="isAdmin ? recentHistory : userAnalysis.recent_detections" style="width: 100%" size="small">
+                    <el-table-column prop="timestamp" label="时间" width="120">
+                      <template #default="{ row }">
+                        {{ formatTime(row.timestamp) }}
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="模型" width="100">
+                      <template #default="{ row }">
+                        {{ getModelDisplayName(row.model) }}
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="结果" min-width="120">
+                      <template #default="{ row }">
+                        <el-tag size="small" :type="row.count > 0 ? 'danger' : 'success'">
+                          {{ row.count > 0 ? `发现${row.count}处骨折` : '未发现骨折' }}
+                        </el-tag>
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="操作" width="80" align="center">
+                      <template #default="{ row }">
+                        <el-button size="small" @click="viewHistoryDetail(row)">
+                          <el-icon><View /></el-icon>
+                        </el-button>
+                      </template>
+                    </el-table-column>
+                  </el-table>
+                </div>
+              </div>
+
+              <!-- 右侧：模型性能 -->
+              <div class="dashboard-card">
+                <h3 class="card-title">
+                  <el-icon><TrendCharts /></el-icon>
+                  {{ isAdmin ? '模型性能' : '我的模型使用' }}
+                </h3>
+                <div class="model-performance">
+                  <div class="performance-item" v-for="(count, model) in (isAdmin ? analysis.models_used : userAnalysis.models_used)" :key="model">
+                    <div class="performance-label">{{ getModelDisplayName(model) }}</div>
+                    <div class="performance-bar">
+                      <div 
+                        class="performance-fill" 
+                        :style="{ width: Math.min((count / Math.max(...Object.values(isAdmin ? analysis.models_used : userAnalysis.models_used), 1)) * 100, 100) + '%' }"
+                      ></div>
+                    </div>
+                    <div class="performance-value">{{ count }}次</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 置信度趋势 -->
+            <div class="dashboard-card full-width">
+              <h3 class="card-title">
+                <el-icon><TrendCharts /></el-icon>
+                检测置信度趋势
+              </h3>
+              <div v-if="!lineData.length" class="no-data">暂无检测记录</div>
+              <div v-show="lineData.length" ref="confidenceLineRef" style="height:320px"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 图片检测页面 -->
+        <div v-if="activeMenu === 'image'" class="content-section">
           <h2>多模型骨折检测</h2>
           <Detection />
         </div>
@@ -281,7 +458,8 @@
         <!-- 系统设置 -->
         <div v-if="activeMenu === 'settings'" class="content-section">
           <h2>系统设置</h2>
-          <el-form label-width="120px" style="max-width:500px">
+          <el-form label-width="150px" style="max-width:600px">
+            <h3>模型设置</h3>
             <el-form-item label="默认模型">
               <el-select v-model="settings.default_model" placeholder="选择默认模型" style="width: 200px">
                 <el-option-group label="系统模型">
@@ -305,8 +483,103 @@
             <el-form-item label="置信度阈值">
               <el-input-number v-model="settings.confidence_threshold" :min="0" :max="1" :step="0.01" />
             </el-form-item>
+
+            <el-divider />
+
+            <h3>AI服务设置</h3>
+            <el-form-item label="AI服务提供商">
+              <el-radio-group v-model="settings.ai_provider">
+                <el-radio label="local">本地部署 (Qwen3-VL)</el-radio>
+                <el-radio label="openai">OpenAI API</el-radio>
+                <el-radio label="modelscope">ModelScope API</el-radio>
+                <el-radio label="custom">自定义API</el-radio>
+              </el-radio-group>
+            </el-form-item>
+
+            <!-- 本地部署配置 -->
+            <div v-if="settings.ai_provider === 'local'" class="ai-config-section">
+              <el-alert
+                title="使用本地部署的Qwen3-VL-4B模型"
+                description="需要启动AI服务 (python AI/app.py)，无需API密钥"
+                type="info"
+                :closable="false"
+              />
+            </div>
+
+            <!-- OpenAI配置 -->
+            <div v-if="settings.ai_provider === 'openai'" class="ai-config-section">
+              <el-form-item label="API密钥">
+                <el-input
+                  v-model="settings.ai_api_key"
+                  type="password"
+                  placeholder="sk-xxxxxxxxxxxxxxxx"
+                  show-password
+                />
+              </el-form-item>
+              <el-form-item label="模型">
+                <el-select v-model="settings.ai_model" placeholder="选择模型">
+                  <el-option label="GPT-4" value="gpt-4" />
+                  <el-option label="GPT-4 Turbo" value="gpt-4-turbo-preview" />
+                  <el-option label="GPT-3.5 Turbo" value="gpt-3.5-turbo" />
+                </el-select>
+              </el-form-item>
+            </div>
+
+            <!-- ModelScope配置 -->
+            <div v-if="settings.ai_provider === 'modelscope'" class="ai-config-section">
+              <el-alert
+                title="使用ModelScope API"
+                description="支持多模态大模型，需要ModelScope Token"
+                type="info"
+                :closable="false"
+                style="margin-bottom: 16px;"
+              />
+              <el-form-item label="API密钥 (Token)">
+                <el-input
+                  v-model="settings.ai_api_key"
+                  type="password"
+                  placeholder="ms-xxxxxxxx 或从ModelScope获取的Token"
+                  show-password
+                />
+              </el-form-item>
+              <el-form-item label="模型ID">
+                <el-select v-model="settings.ai_model" placeholder="选择模型" filterable allow-create>
+                  <el-option label="Qwen3.5-397B-A17B" value="Qwen/Qwen3.5-397B-A17B" />
+                  <el-option label="Qwen2-VL-72B-Instruct" value="Qwen/Qwen2-VL-72B-Instruct" />
+                  <el-option label="Qwen2-VL-7B-Instruct" value="Qwen/Qwen2-VL-7B-Instruct" />
+                  <el-option label="InternVL2-Llama3-76B" value="OpenGVLab/InternVL2-Llama3-76B" />
+                </el-select>
+                <div class="form-tip">可手动输入其他ModelScope模型ID</div>
+              </el-form-item>
+            </div>
+
+            <!-- 自定义API配置 -->
+            <div v-if="settings.ai_provider === 'custom'" class="ai-config-section">
+              <el-form-item label="API地址">
+                <el-input
+                  v-model="settings.ai_api_url"
+                  placeholder="https://api.example.com/v1/chat/completions"
+                />
+              </el-form-item>
+              <el-form-item label="API密钥">
+                <el-input
+                  v-model="settings.ai_api_key"
+                  type="password"
+                  placeholder="your-api-key"
+                  show-password
+                />
+              </el-form-item>
+              <el-form-item label="模型名称">
+                <el-input
+                  v-model="settings.ai_model"
+                  placeholder="gpt-4"
+                />
+              </el-form-item>
+            </div>
+
             <el-form-item>
               <el-button type="primary" @click="saveSettings">保存设置</el-button>
+              <el-button @click="testAIConnection" :loading="aiTestLoading">测试连接</el-button>
             </el-form-item>
           </el-form>
         </div>
@@ -460,7 +733,7 @@ import VideoStreamDetection from './VideoStreamDetection.vue'
 import CameraDetection from './CameraDetection.vue'
 import ModelTraining from './ModelTraining.vue'
 import { Line } from '@antv/g2plot'
-import { ArrowDown, Fold, Expand, Picture, Clock, TrendCharts, Setting, User, Moon, Sunny, UserFilled, SwitchButton, Document, Folder, Monitor, Close, Download, View, Delete, VideoCamera, Camera, MagicStick } from '@element-plus/icons-vue'
+import { ArrowDown, Fold, Expand, Picture, Clock, TrendCharts, Setting, User, Moon, Sunny, UserFilled, SwitchButton, Document, Folder, Monitor, Close, Download, View, Delete, VideoCamera, Camera, MagicStick, HomeFilled } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 
 
@@ -572,8 +845,12 @@ const customModelsForSettings = computed(() => {
 
 // 历史记录
 const historyList = ref([])
+const recentHistory = ref([])
 const historyDetailVisible = ref(false)
 const currentHistory = ref(null)
+
+// 模型状态
+const models = ref({})
 
 // 分析数据
 const analysis = reactive({
@@ -582,6 +859,13 @@ const analysis = reactive({
   classes_detected: {},
   avg_confidence: 0
 })
+const userAnalysis = reactive({
+  total_detections: 0,
+  models_used: {},
+  classes_detected: {},
+  avg_confidence: 0,
+  recent_detections: []
+})
 const modelsData = ref([])
 const classesData = ref([])
 
@@ -589,14 +873,28 @@ const classesData = ref([])
 const settings = reactive({
   default_model: 'yolov8',
   available_models: [],
-  confidence_threshold: 0.25
+  confidence_threshold: 0.25,
+  ai_provider: 'local',
+  ai_api_key: '',
+  ai_api_url: '',
+  ai_model: 'gpt-4'
 })
+
+// AI连接测试状态
+const aiTestLoading = ref(false)
+
+// 导航到指定页面
+const navigateTo = (menuIndex) => {
+  activeMenu.value = menuIndex
+}
 
 // 加载历史
 const loadHistory = async () => {
   try {
     const res = await axios.get('/api/history')
     historyList.value = res.data.data
+    // 取最近5条记录
+    recentHistory.value = res.data.data.slice(0, 5)
   } catch (err) {
     console.error('加载历史失败', err)
   }
@@ -605,20 +903,24 @@ const loadHistory = async () => {
 // 删除历史
 const deleteHistory = async (id) => {
   try {
-    await axios.delete(`http://127.0.0.1:5000/api/history/ ${id}`)
+    await axios.delete(`/api/history/${id}`)
+    ElMessage.success('删除成功')
     loadHistory()
   } catch (err) {
     console.error('删除失败', err)
+    ElMessage.error('删除失败: ' + (err.response?.data?.error || err.message))
   }
 }
 
 // 清空历史
 const clearHistory = async () => {
   try {
-    await axios.delete('http://127.0.0.1:5000/api/history/clear/all ')
+    await axios.delete('/api/history/clear/all')
+    ElMessage.success('清空成功')
     loadHistory()
   } catch (err) {
     console.error('清空失败', err)
+    ElMessage.error('清空失败: ' + (err.response?.data?.error || err.message))
   }
 }
 
@@ -663,14 +965,27 @@ const downloadImage = (url) => {
 // 加载分析
 const loadAnalysis = async () => {
   try {
-    const res = await axios.get('/api/analysis')
-    Object.assign(analysis, res.data)
-    // 使用模型名称映射转换 key 为可读名称
-    modelsData.value = Object.entries(analysis.models_used).map(([key, count]) => ({
-      name: getModelDisplayName(key),
-      count
-    }))
-    classesData.value = Object.entries(analysis.classes_detected).map(([name, count]) => ({ name, count }))
+    if (isAdmin.value) {
+      // 管理员加载全部数据
+      const res = await axios.get('/api/analysis')
+      Object.assign(analysis, res.data)
+      // 使用模型名称映射转换 key 为可读名称
+      modelsData.value = Object.entries(analysis.models_used).map(([key, count]) => ({
+        name: getModelDisplayName(key),
+        count
+      }))
+      classesData.value = Object.entries(analysis.classes_detected).map(([name, count]) => ({ name, count }))
+    } else {
+      // 普通用户加载个人数据
+      const res = await axios.get('/api/analysis/user_stats')
+      Object.assign(userAnalysis, res.data)
+      // 使用模型名称映射转换 key 为可读名称
+      modelsData.value = Object.entries(userAnalysis.models_used).map(([key, count]) => ({
+        name: getModelDisplayName(key),
+        count
+      }))
+      classesData.value = Object.entries(userAnalysis.classes_detected).map(([name, count]) => ({ name, count }))
+    }
   } catch (err) {
     console.error('加载分析失败', err)
   }
@@ -696,6 +1011,32 @@ const saveSettings = async () => {
   }
 }
 
+// 测试AI连接
+const testAIConnection = async () => {
+  aiTestLoading.value = true
+  try {
+    // 发送测试请求到AI解读接口
+    const testData = {
+      detections: [{ class: '测试', confidence: 0.95, bbox: [0, 0, 100, 100] }],
+      prompt: '这是一个连接测试，请回复"连接成功"。'
+    }
+
+    const res = await axios.post('/api/interpret', testData)
+
+    if (res.data.success) {
+      ElMessage.success(`连接成功！使用提供商: ${res.data.ai_provider || '未知'}`)
+    } else {
+      ElMessage.error(res.data.error || '连接失败')
+    }
+  } catch (err) {
+    const errorMsg = err.response?.data?.error || err.message || '连接失败'
+    const hint = err.response?.data?.hint || ''
+    ElMessage.error(`${errorMsg}${hint ? ' - ' + hint : ''}`)
+  } finally {
+    aiTestLoading.value = false
+  }
+}
+
 // 退出 - 使用 window.location.replace 强制刷新，确保状态完全重置
 const logout = () => {
   // 清除所有登录状态
@@ -717,8 +1058,15 @@ let linePlot = null                   // 图表实例
 
 const reloadLineData = async () => {
   try {
-    const res = await axios.get('/api/analysis/confidence_series')
-    lineData.value = res.data ?? []   // 兜底空数组
+    if (isAdmin.value) {
+      // 管理员加载全部数据
+      const res = await axios.get('/api/analysis/confidence_series')
+      lineData.value = res.data ?? []   // 兜底空数组
+    } else {
+      // 普通用户加载个人数据
+      const res = await axios.get('/api/analysis/user_confidence_series')
+      lineData.value = res.data ?? []   // 兜底空数组
+    }
   } catch (e) {
     console.error('拉取折线数据失败', e)
     lineData.value = []               // 出错也清空，避免旧脏数据
@@ -734,9 +1082,8 @@ const destroyChart = () => {
 }
 
 const drawConfidenceLine = async (force = false) => {
-  // 如果不是管理员或不在分析页面，不绘制（除非强制刷新）
-  if (!isAdmin.value) return
-  if (activeMenu.value !== 'analysis' && !force) return
+  // 只在分析页面或首页绘制
+  if (activeMenu.value !== 'analysis' && activeMenu.value !== 'detect' && !force) return
   
   // 强制刷新时，先销毁旧图表
   if (force) {
@@ -877,20 +1224,26 @@ onMounted(() => {
   if (isAdmin.value) {
     loadAnalysis()
     loadSettings()
-    if (activeMenu.value === 'analysis') {
-      setTimeout(() => drawConfidenceLine(), 100)
-    }
+  } else {
+    // 普通用户也加载个人分析数据
+    loadAnalysis()
+  }
+  // 所有用户都绘制图表
+  if (activeMenu.value === 'analysis' || activeMenu.value === 'detect') {
+    setTimeout(() => drawConfidenceLine(), 100)
   }
 })
 
 watch(activeMenu, (val) => {
-  if (val === 'analysis' && isAdmin.value) {
+  if (val === 'analysis' || val === 'detect') {
     // 延迟执行，确保DOM已更新
     setTimeout(() => {
       // 如果有新数据或图表未渲染，则强制刷新
       if (needRefreshChart.value || !lineRendered.value) {
         needRefreshChart.value = false
         drawConfidenceLine(true) // 强制刷新
+      } else {
+        drawConfidenceLine() // 正常绘制
       }
     }, 100)
   }
@@ -1555,5 +1908,452 @@ html.dark .no-data {
 
 .cell-model {
   font-size: 13px;
+}
+
+/* 仪表盘样式 */
+.dashboard-container {
+  width: 100%;
+}
+
+/* 仪表盘头部 */
+.dashboard-header {
+  background: linear-gradient(135deg, #1e40af 0%, #3b82f6 100%);
+  border-radius: 16px;
+  padding: 32px;
+  color: white;
+  margin-bottom: 24px;
+  box-shadow: 0 8px 24px rgba(59, 130, 246, 0.3);
+}
+
+.header-content {
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.dashboard-title {
+  font-size: 32px;
+  font-weight: bold;
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+.title-icon {
+  font-size: 40px;
+}
+
+.dashboard-subtitle {
+  font-size: 16px;
+  margin-bottom: 24px;
+  opacity: 0.9;
+}
+
+.header-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 24px;
+  margin-top: 24px;
+}
+
+.header-stats .stat-item {
+  text-align: center;
+  background: rgba(255, 255, 255, 0.1);
+  padding: 20px;
+  border-radius: 12px;
+  backdrop-filter: blur(10px);
+  transition: transform 0.3s ease;
+}
+
+.header-stats .stat-item:hover {
+  transform: translateY(-4px);
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.header-stats .stat-value {
+  font-size: 32px;
+  font-weight: bold;
+  color: white;
+  margin-bottom: 4px;
+}
+
+.header-stats .stat-label {
+  font-size: 14px;
+  color: rgba(255, 255, 255, 0.8);
+}
+
+/* 功能模块 */
+.quick-access {
+  margin-bottom: 24px;
+}
+
+.section-title {
+  font-size: 20px;
+  font-weight: 600;
+  margin-bottom: 16px;
+  color: #1e40af;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.module-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 20px;
+}
+
+.module-card {
+  background: white;
+  border-radius: 16px;
+  padding: 24px;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  border: 1px solid #e2e8f0;
+  position: relative;
+  overflow: hidden;
+}
+
+.module-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 4px;
+  background: linear-gradient(90deg, #3b82f6, #8b5cf6);
+  transform: scaleX(0);
+  transition: transform 0.3s ease;
+}
+
+.module-card:hover {
+  transform: translateY(-8px);
+  box-shadow: 0 8px 24px rgba(59, 130, 246, 0.2);
+  border-color: #3b82f6;
+}
+
+.module-card:hover::before {
+  transform: scaleX(1);
+}
+
+.module-icon {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 16px;
+  font-size: 24px;
+  color: white;
+}
+
+.detection-icon {
+  background: linear-gradient(135deg, #3b82f6, #60a5fa);
+}
+
+.video-icon {
+  background: linear-gradient(135deg, #8b5cf6, #a78bfa);
+}
+
+.camera-icon {
+  background: linear-gradient(135deg, #10b981, #34d399);
+}
+
+.training-icon {
+  background: linear-gradient(135deg, #f97316, #fb923c);
+}
+
+.module-title {
+  font-size: 18px;
+  font-weight: 600;
+  margin-bottom: 8px;
+  color: #1e40af;
+}
+
+.module-desc {
+  font-size: 14px;
+  color: #6b7280;
+  margin: 0;
+}
+
+/* 仪表盘网格 */
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+  gap: 20px;
+  margin-bottom: 24px;
+}
+
+.dashboard-card {
+  background: white;
+  border-radius: 16px;
+  padding: 20px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  border: 1px solid #e2e8f0;
+  transition: all 0.3s ease;
+}
+
+.dashboard-card:hover {
+  box-shadow: 0 8px 24px rgba(59, 130, 246, 0.15);
+  border-color: #3b82f6;
+}
+
+.dashboard-card.full-width {
+  grid-column: 1 / -1;
+}
+
+.card-title {
+  font-size: 16px;
+  font-weight: 600;
+  margin-bottom: 16px;
+  color: #1e40af;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 系统状态 */
+.system-status {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.status-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 0;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.status-item:last-child {
+  border-bottom: none;
+}
+
+.status-label {
+  font-size: 14px;
+  color: #6b7280;
+}
+
+.status-value {
+  font-size: 14px;
+  font-weight: 500;
+  color: #1e40af;
+}
+
+.status-value.online {
+  color: #10b981;
+  font-weight: 600;
+}
+
+/* 最近检测 */
+.recent-history {
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+/* 模型性能 */
+.model-performance {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.performance-item {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.performance-label {
+  font-size: 14px;
+  color: #6b7280;
+  font-weight: 500;
+}
+
+.performance-bar {
+  height: 8px;
+  background: #f1f5f9;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.performance-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #3b82f6, #8b5cf6);
+  border-radius: 4px;
+  transition: width 0.5s ease;
+}
+
+.performance-value {
+  font-size: 12px;
+  color: #6b7280;
+  text-align: right;
+}
+
+/* 置信度趋势 */
+:deep(.g2-tooltip) {
+  border-radius: 8px !important;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15) !important;
+  border: none !important;
+}
+
+/* 响应式调整 */
+@media (max-width: 1024px) {
+  .dashboard-grid {
+    grid-template-columns: 1fr;
+  }
+  
+  .module-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  
+  .header-stats {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 768px) {
+  .dashboard-header {
+    padding: 24px;
+  }
+  
+  .dashboard-title {
+    font-size: 24px;
+  }
+  
+  .module-grid {
+    grid-template-columns: 1fr;
+  }
+  
+  .header-stats {
+    grid-template-columns: 1fr;
+  }
+  
+  .dashboard-card {
+    padding: 16px;
+  }
+}
+
+/* 暗色模式下的仪表盘样式 */
+html.dark .dashboard-header {
+  background: linear-gradient(135deg, #1e293b 0%, #334155 100%);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+}
+
+html.dark .header-stats .stat-item {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+html.dark .header-stats .stat-item:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+html.dark .module-card {
+  background: #334155;
+  border-color: #475569;
+}
+
+html.dark .module-card:hover {
+  border-color: #60a5fa;
+}
+
+html.dark .module-title {
+  color: #e2e8f0;
+}
+
+html.dark .module-desc {
+  color: #94a3b8;
+}
+
+html.dark .dashboard-card {
+  background: #334155;
+  border-color: #475569;
+}
+
+html.dark .dashboard-card:hover {
+  border-color: #60a5fa;
+}
+
+html.dark .card-title {
+  color: #e2e8f0;
+}
+
+html.dark .status-label {
+  color: #94a3b8;
+}
+
+html.dark .status-value {
+  color: #e2e8f0;
+}
+
+html.dark .performance-label {
+  color: #94a3b8;
+}
+
+html.dark .performance-bar {
+  background: #475569;
+}
+
+html.dark .performance-value {
+  color: #94a3b8;
+}
+
+html.dark .section-title {
+  color: #e2e8f0;
+}
+
+/* ==================== AI配置部分样式 ==================== */
+.ai-config-section {
+  background: #f8fafc;
+  border-radius: 8px;
+  padding: 16px;
+  margin: 8px 0;
+  border: 1px solid #e2e8f0;
+}
+
+html.dark .ai-config-section {
+  background: #1e293b;
+  border-color: #334155;
+}
+
+/* 设置表单样式 */
+.content-section :deep(.el-form-item__label) {
+  font-weight: 500;
+  color: var(--medical-text-primary);
+}
+
+.content-section :deep(.el-radio__label) {
+  color: var(--medical-text-primary);
+}
+
+.content-section :deep(.el-divider__text) {
+  background: var(--medical-bg);
+  color: var(--medical-text-secondary);
+  font-weight: 600;
+}
+
+.content-section h3 {
+  color: var(--medical-text-primary);
+  font-size: 16px;
+  margin: 20px 0 16px 0;
+  padding-left: 12px;
+  border-left: 4px solid var(--medical-primary);
+}
+
+/* 表单提示文字 */
+.form-tip {
+  font-size: 12px;
+  color: #909399;
+  margin-top: 4px;
+}
+
+html.dark .form-tip {
+  color: #94a3b8;
 }
 </style>

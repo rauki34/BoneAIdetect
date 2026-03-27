@@ -174,7 +174,8 @@
     <el-dialog
       v-model="resultDialogVisible"
       title="医疗分析结果"
-      width="800px"
+      width="900px"
+      class="interpret-result-dialog"
     >
       <div v-if="interpretResult" class="interpret-result">
         <el-alert
@@ -185,7 +186,9 @@
         >
           此为AI辅助诊断结果仅供参考，具体诊断请咨询专业医生
         </el-alert>
-        <pre class="result-content">{{ interpretResult }}</pre>
+        <div class="markdown-body">
+          <vue-markdown :source="interpretResult" />
+        </div>
       </div>
       <template #footer>
         <el-button @click="resultDialogVisible = false">关闭</el-button>
@@ -199,6 +202,8 @@
 import axios from '../utils/axios'
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
+import VueMarkdown from 'vue-markdown-render'
+import 'github-markdown-css/github-markdown-light.css'
 
 /* 响应式变量 */
 const file     = ref(null)      // 当前选中的原始 File
@@ -275,17 +280,18 @@ function openInterpretDialog() {
     return `检测${i + 1}: 类别=${p.class}, 置信度=${(p.confidence * 100).toFixed(1)}%, 位置=${p.bbox}`
   }).join('\n')
 
-  customPrompt.value = `你是一位专业的骨科医生助手。请根据以下骨折检测结果，提供专业的医疗建议。
+  customPrompt.value = `你是一位专业的骨科医生助手。我将提供骨折检测的X光片图像和检测结果，请结合图像和检测信息进行专业分析。
 
 检测结果：
 ${detectionSummary}
 
-请提供以下信息：
-1. 风险评估：根据检测到的骨折类型，评估病情的严重程度
-2. 进一步检查建议：建议进行哪些进一步检查（如X光、CT、MRI等）
-3. 处置建议：初步的处置建议（如固定、手术、转诊等）
-4. 注意事项：患者应该注意的事项
-5. 免责声明：提示此为AI辅助诊断，最终诊断需由专业医生确定
+请结合X光片图像和检测结果，提供以下信息：
+1. 图像分析：观察X光片中的骨折位置、类型和严重程度
+2. 风险评估：根据检测到的骨折类型和图像表现，评估病情的严重程度
+3. 进一步检查建议：建议进行哪些进一步检查（如CT、MRI等）
+4. 处置建议：初步的处置建议（如固定、手术、转诊等）
+5. 注意事项：患者应该注意的事项
+6. 免责声明：提示此为AI辅助诊断，最终诊断需由专业医生确定
 
 请用中文回复，结构化输出。`
 
@@ -295,6 +301,16 @@ ${detectionSummary}
     symptoms: ''
   }
   interpretDialogVisible.value = true
+}
+
+/* 将文件转换为base64 */
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.readAsDataURL(file)
+    reader.onload = () => resolve(reader.result.split(',')[1]) // 去掉data:image前缀
+    reader.onerror = error => reject(error)
+  })
 }
 
 /* 提交医疗分析请求 */
@@ -313,10 +329,23 @@ async function submitInterpret() {
   }
 
   try {
-    const res = await axios.post('/api/interpret', {
+    // 准备请求数据
+    const requestData = {
       detections: result.value.predictions,
       prompt: promptWithPatient
-    }, {
+    }
+
+    // 如果有原始图片文件，转换为base64传递
+    if (file.value) {
+      try {
+        const imageBase64 = await fileToBase64(file.value)
+        requestData.image_base64 = imageBase64
+      } catch (imgErr) {
+        console.warn('图片转换失败，继续发送文本:', imgErr)
+      }
+    }
+
+    const res = await axios.post('/api/interpret', requestData, {
       timeout: 180000
     })
 
@@ -551,5 +580,191 @@ html.dark .el-alert__title {
 
 html.dark .el-alert__description {
   color: #94a3b8;
+}
+
+/* ==================== Markdown 渲染样式 ==================== */
+
+/* Markdown 内容区域 */
+.markdown-body {
+  padding: 16px;
+  background-color: #ffffff;
+  border-radius: 8px;
+  border: 1px solid #e1e4e8;
+  max-height: 600px;
+  overflow-y: auto;
+}
+
+/* 暗色模式下的 Markdown */
+html.dark .markdown-body {
+  background-color: #0d1117;
+  border-color: #30363d;
+  color: #c9d1d9;
+}
+
+/* 调整对话框内的 Markdown 样式 */
+.interpret-result-dialog :deep(.el-dialog__body) {
+  padding: 20px;
+}
+
+/* Markdown 标题样式优化 */
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4 {
+  margin-top: 24px;
+  margin-bottom: 16px;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.markdown-body h1 {
+  font-size: 1.5em;
+  border-bottom: 1px solid #eaecef;
+  padding-bottom: 0.3em;
+}
+
+.markdown-body h2 {
+  font-size: 1.25em;
+  border-bottom: 1px solid #eaecef;
+  padding-bottom: 0.3em;
+}
+
+.markdown-body h3 {
+  font-size: 1.125em;
+}
+
+/* 暗色模式下的标题 */
+html.dark .markdown-body h1,
+html.dark .markdown-body h2 {
+  border-bottom-color: #30363d;
+}
+
+/* 列表样式优化 */
+.markdown-body ul,
+.markdown-body ol {
+  padding-left: 2em;
+  margin-bottom: 16px;
+}
+
+.markdown-body li {
+  margin-bottom: 0.25em;
+}
+
+/* 强调文字 */
+.markdown-body strong {
+  font-weight: 600;
+  color: #d73a49;
+}
+
+html.dark .markdown-body strong {
+  color: #f85149;
+}
+
+/* 引用块样式 */
+.markdown-body blockquote {
+  padding: 0 1em;
+  color: #6a737d;
+  border-left: 0.25em solid #dfe2e5;
+  margin: 0 0 16px 0;
+}
+
+html.dark .markdown-body blockquote {
+  color: #8b949e;
+  border-left-color: #30363d;
+}
+
+/* 代码块样式 */
+.markdown-body code {
+  padding: 0.2em 0.4em;
+  margin: 0;
+  font-size: 85%;
+  background-color: rgba(27, 31, 35, 0.05);
+  border-radius: 3px;
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+}
+
+.markdown-body pre {
+  padding: 16px;
+  overflow: auto;
+  font-size: 85%;
+  line-height: 1.45;
+  background-color: #f6f8fa;
+  border-radius: 6px;
+  margin-bottom: 16px;
+}
+
+.markdown-body pre code {
+  background-color: transparent;
+  padding: 0;
+}
+
+html.dark .markdown-body code {
+  background-color: rgba(110, 118, 129, 0.4);
+}
+
+html.dark .markdown-body pre {
+  background-color: #161b22;
+}
+
+/* 表格样式 */
+.markdown-body table {
+  border-spacing: 0;
+  border-collapse: collapse;
+  margin-bottom: 16px;
+  width: 100%;
+  overflow: auto;
+  display: block;
+}
+
+.markdown-body table th,
+.markdown-body table td {
+  padding: 6px 13px;
+  border: 1px solid #dfe2e5;
+}
+
+.markdown-body table th {
+  font-weight: 600;
+  background-color: #f6f8fa;
+}
+
+.markdown-body table tr:nth-child(2n) {
+  background-color: #f6f8fa;
+}
+
+html.dark .markdown-body table th,
+html.dark .markdown-body table td {
+  border-color: #30363d;
+}
+
+html.dark .markdown-body table th,
+html.dark .markdown-body table tr:nth-child(2n) {
+  background-color: #161b22;
+}
+
+/* 水平线 */
+.markdown-body hr {
+  height: 0.25em;
+  padding: 0;
+  margin: 24px 0;
+  background-color: #e1e4e8;
+  border: 0;
+}
+
+html.dark .markdown-body hr {
+  background-color: #30363d;
+}
+
+/* 链接样式 */
+.markdown-body a {
+  color: #0366d6;
+  text-decoration: none;
+}
+
+.markdown-body a:hover {
+  text-decoration: underline;
+}
+
+html.dark .markdown-body a {
+  color: #58a6ff;
 }
 </style>

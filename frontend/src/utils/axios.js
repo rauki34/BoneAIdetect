@@ -1,9 +1,10 @@
 import axios from 'axios'
 
-// 创建axios实例
+// 创建 axios 实例
 const instance = axios.create({
   baseURL: 'http://127.0.0.1:5000',
-  timeout: 30000
+  timeout: 30000,
+  withCredentials: true  // 启用 session 支持
 })
 
 // 请求拦截器：添加用户名到请求头
