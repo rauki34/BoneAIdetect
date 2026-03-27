@@ -1,11 +1,13 @@
-from flask import Flask, request, jsonify, send_from_directory
+from flask import Flask, request, jsonify, send_from_directory, session
 from flask_cors import CORS
 from ultralytics import YOLO
-import os, time, cv2, json, glob
+import os, time, cv2, json, glob, random, io
+import requests
 from datetime import datetime
 from pathlib import Path
 from functools import wraps
 from werkzeug.security import generate_password_hash, check_password_hash
+from PIL import Image, ImageDraw, ImageFont
 from database import db, User, DetectionHistory, SystemSettings, OperationLog, FileRecord, CustomModel, TrainingTask, init_db, migrate_from_json
 
 # 导入自定义YOLO模块（CBAM注意力机制）
@@ -20,13 +22,18 @@ except ImportError as e:
     print(f"⚠ CBAM模块加载失败: {e}")
 
 app = Flask(__name__)
+
+# 配置session
+app.config['SECRET_KEY'] = 'your-secret-key-change-in-production'  # 生产环境要修改
+app.config['PERMANENT_SESSION_LIFETIME'] = 3600  # 1小时
+
 # 全局CORS配置 - 允许所有来源
 CORS(app, resources={
     r"/*": {
         "origins": ["http://localhost:5173", "http://127.0.0.1:5173"],
         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         "allow_headers": ["Content-Type", "Authorization", "X-Username"],
-        "supports_credentials": False
+        "supports_credentials": True  # 需要启用，因为使用session
     }
 })
 
@@ -55,7 +62,7 @@ os.makedirs(MODELS_DIR, exist_ok=True)
 # 模型文件映射: 模型键 -> 模型文件路径
 # 注意：CBAM模型(yolov8-cbam/yolo11-cbam)不需要预训练文件，训练时会动态创建
 MODEL_CANDIDATES = {
-    "yolov8": os.path.join(BASE_DIR, "models", "yolov8n.pt"),
+    "yolov8": os.path.join(BASE_DIR, "models", "yolov8.pt"),
     "yolo12": os.path.join(BASE_DIR, "models", "yolo12n.pt"),
     "yolo11": os.path.join(BASE_DIR, "models", "yolo11n.pt"),
 }
@@ -63,10 +70,10 @@ MODEL_CANDIDATES = {
 # 基础模型到实际模型文件名的映射（用于训练时加载）
 # CBAM模型映射到对应的基础模型文件
 BASE_MODEL_MAP = {
-    "yolov8": "yolov8n",
+    "yolov8": "yolov8",
     "yolo11": "yolo11n",
     "yolo12": "yolo12n",
-    "yolov8-cbam": "yolov8n",  # CBAM版本使用yolov8n基础模型
+    "yolov8-cbam": "yolov8",  # CBAM版本使用yolov8基础模型
     "yolo11-cbam": "yolo11n",  # CBAM版本使用yolo11n基础模型
 }
 
@@ -175,6 +182,7 @@ def register():
     username = data.get("username", "").strip()
     password = data.get("password", "").strip()
     password_confirm = data.get("password_confirm", "").strip()
+    captcha = data.get("captcha", "").strip().upper()
     
     # 验证输入
     if not username or not password:
@@ -189,6 +197,19 @@ def register():
     if password != password_confirm:
         return jsonify({"error": "两次输入的密码不一致"}), 400
     
+    # 验证验证码
+    if not captcha:
+        return jsonify({"error": "验证码不能为空"}), 400
+    
+    # 从session获取验证码
+    session_captcha = session.get('captcha', '').upper()
+    
+    if not session_captcha:
+        return jsonify({"error": "验证码已过期"}), 400
+    
+    if captcha != session_captcha:
+        return jsonify({"error": "验证码错误"}), 400
+    
     # 检查用户是否已存在
     if User.query.filter_by(username=username).first():
         return jsonify({"error": "用户名已存在"}), 409
@@ -201,6 +222,9 @@ def register():
     )
     db.session.add(new_user)
     db.session.commit()
+    
+    # 清除session中的验证码
+    session.pop('captcha', None)
     
     log_operation(f"用户注册:{username}")
     
@@ -436,6 +460,19 @@ def get_settings():
     confidence_setting = SystemSettings.query.filter_by(key='confidence_threshold').first()
     confidence_threshold = float(confidence_setting.value) if confidence_setting else 0.25
     
+    # AI服务配置
+    ai_provider_setting = SystemSettings.query.filter_by(key='ai_provider').first()
+    ai_provider = ai_provider_setting.value if ai_provider_setting else 'local'
+    
+    ai_api_key_setting = SystemSettings.query.filter_by(key='ai_api_key').first()
+    ai_api_key = ai_api_key_setting.value if ai_api_key_setting else ''
+    
+    ai_api_url_setting = SystemSettings.query.filter_by(key='ai_api_url').first()
+    ai_api_url = ai_api_url_setting.value if ai_api_url_setting else ''
+    
+    ai_model_setting = SystemSettings.query.filter_by(key='ai_model').first()
+    ai_model = ai_model_setting.value if ai_model_setting else 'gpt-4'
+    
     # 获取所有已发布的模型（系统模型 + 自定义模型）
     available_models = []
     
@@ -460,7 +497,11 @@ def get_settings():
     return jsonify({
         "default_model": default_model,
         "available_models": available_models,
-        "confidence_threshold": confidence_threshold
+        "confidence_threshold": confidence_threshold,
+        "ai_provider": ai_provider,
+        "ai_api_key": ai_api_key,
+        "ai_api_url": ai_api_url,
+        "ai_model": ai_model
     })
 
 
@@ -483,6 +524,39 @@ def update_settings():
             setting.value = str(data['confidence_threshold'])
         else:
             setting = SystemSettings(key='confidence_threshold', value=str(data['confidence_threshold']))
+        db.session.add(setting)
+    
+    # AI服务配置
+    if 'ai_provider' in data:
+        setting = SystemSettings.query.filter_by(key='ai_provider').first()
+        if setting:
+            setting.value = data['ai_provider']
+        else:
+            setting = SystemSettings(key='ai_provider', value=data['ai_provider'])
+        db.session.add(setting)
+    
+    if 'ai_api_key' in data:
+        setting = SystemSettings.query.filter_by(key='ai_api_key').first()
+        if setting:
+            setting.value = data['ai_api_key']
+        else:
+            setting = SystemSettings(key='ai_api_key', value=data['ai_api_key'])
+        db.session.add(setting)
+    
+    if 'ai_api_url' in data:
+        setting = SystemSettings.query.filter_by(key='ai_api_url').first()
+        if setting:
+            setting.value = data['ai_api_url']
+        else:
+            setting = SystemSettings(key='ai_api_url', value=data['ai_api_url'])
+        db.session.add(setting)
+    
+    if 'ai_model' in data:
+        setting = SystemSettings.query.filter_by(key='ai_model').first()
+        if setting:
+            setting.value = data['ai_model']
+        else:
+            setting = SystemSettings(key='ai_model', value=data['ai_model'])
         db.session.add(setting)
     
     db.session.commit()
@@ -612,16 +686,165 @@ def update_user(user_id):
 
 AI_SERVICE_URL = "http://127.0.0.1:8000"
 
+def get_ai_settings():
+    """获取AI服务配置"""
+    ai_provider_setting = SystemSettings.query.filter_by(key='ai_provider').first()
+    ai_provider = ai_provider_setting.value if ai_provider_setting else 'local'
+    
+    ai_api_key_setting = SystemSettings.query.filter_by(key='ai_api_key').first()
+    ai_api_key = ai_api_key_setting.value if ai_api_key_setting else ''
+    
+    ai_api_url_setting = SystemSettings.query.filter_by(key='ai_api_url').first()
+    ai_api_url = ai_api_url_setting.value if ai_api_url_setting else ''
+    
+    ai_model_setting = SystemSettings.query.filter_by(key='ai_model').first()
+    ai_model = ai_model_setting.value if ai_model_setting else 'gpt-4'
+    
+    return {
+        'provider': ai_provider,
+        'api_key': ai_api_key,
+        'api_url': ai_api_url,
+        'model': ai_model
+    }
+
+def call_local_ai(prompt, image_base64=None):
+    """调用本地部署的AI服务"""
+    ai_request = {"prompt": prompt}
+    if image_base64:
+        ai_request["image"] = image_base64
+    
+    response = requests.post(
+        f"{AI_SERVICE_URL}/chat",
+        json=ai_request,
+        timeout=180
+    )
+    
+    if response.status_code == 200:
+        ai_result = response.json()
+        return ai_result.get("reply", "AI 未能生成有效建议")
+    else:
+        raise Exception(f"AI服务响应失败: {response.text}")
+
+def call_openai_api(prompt, api_key, model='gpt-4'):
+    """调用OpenAI API"""
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+    
+    data = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.7,
+        "max_tokens": 1000
+    }
+    
+    response = requests.post(
+        "https://api.openai.com/v1/chat/completions",
+        headers=headers,
+        json=data,
+        timeout=60
+    )
+    
+    if response.status_code == 200:
+        result = response.json()
+        return result['choices'][0]['message']['content']
+    else:
+        raise Exception(f"OpenAI API调用失败: {response.text}")
+
+def call_custom_api(prompt, api_url, api_key, model='gpt-4'):
+    """调用自定义API"""
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+    
+    data = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.7
+    }
+    
+    response = requests.post(
+        api_url,
+        headers=headers,
+        json=data,
+        timeout=60
+    )
+    
+    if response.status_code == 200:
+        result = response.json()
+        # 适配不同API的响应格式
+        if 'choices' in result:
+            return result['choices'][0]['message']['content']
+        elif 'result' in result:
+            return result['result']
+        elif 'reply' in result:
+            return result['reply']
+        else:
+            return str(result)
+    else:
+        raise Exception(f"自定义API调用失败: {response.text}")
+
+def call_modelscope_api(prompt, api_key, model, image_base64=None):
+    """调用ModelScope API - 支持多模态"""
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+    
+    # 构建消息内容
+    content = []
+    
+    # 添加文本
+    content.append({
+        "type": "text",
+        "text": prompt
+    })
+    
+    # 如果有图片，添加图片
+    if image_base64:
+        content.append({
+            "type": "image_url",
+            "image_url": {
+                "url": f"data:image/jpeg;base64,{image_base64}"
+            }
+        })
+    
+    data = {
+        "model": model,
+        "messages": [{
+            "role": "user",
+            "content": content
+        }],
+        "temperature": 0.7,
+        "max_tokens": 2000,
+        "stream": False  # 使用非流式响应
+    }
+    
+    response = requests.post(
+        "https://api-inference.modelscope.cn/v1/chat/completions",
+        headers=headers,
+        json=data,
+        timeout=120
+    )
+    
+    if response.status_code == 200:
+        result = response.json()
+        if 'choices' in result and len(result['choices']) > 0:
+            return result['choices'][0]['message']['content']
+        else:
+            raise Exception(f"ModelScope API返回格式异常: {result}")
+    else:
+        raise Exception(f"ModelScope API调用失败: {response.status_code} - {response.text}")
+
 @app.route("/api/interpret", methods=["POST"])
 @require_auth
 def interpret_detection():
     """
-    调用 Qwen-VL AI 服务，根据检测结果生成医疗建议
-    输入：检测框列表（detections）、prompt（自定义提示词）、原图 base64（可选）
-    输出：结构化医疗建议
+    调用AI服务生成医疗建议
+    支持本地部署和第三方API
     """
-    import requests
-
     data = request.json
     detections = data.get("detections", [])
     custom_prompt = data.get("prompt", "")
@@ -640,51 +863,51 @@ def interpret_detection():
 
         detection_text = "\n".join(detection_summary)
 
-        prompt = f"""你是一位专业的骨科医生助手。请根据以下骨折检测结果，提供专业的医疗建议。
+        prompt = f"""你是一位专业的骨科医生助手。我将提供骨折检测的X光片图像和检测结果，请结合图像和检测信息进行专业分析。
 
 检测结果：
 {detection_text}
 
-请提供以下信息：
-1. 风险评估：根据检测到的骨折类型，评估病情的严重程度
-2. 进一步检查建议：建议进行哪些进一步检查（如X光、CT、MRI等）
-3. 处置建议：初步的处置建议（如固定、手术、转诊等）
-4. 注意事项：患者应该注意的事项
-5. 免责声明：提示此为AI辅助诊断，最终诊断需由专业医生确定
+请结合X光片图像和检测结果，提供以下信息：
+1. 图像分析：观察X光片中的骨折位置、类型和严重程度
+2. 风险评估：根据检测到的骨折类型和图像表现，评估病情的严重程度
+3. 进一步检查建议：建议进行哪些进一步检查（如CT、MRI等）
+4. 处置建议：初步的处置建议（如固定、手术、转诊等）
+5. 注意事项：患者应该注意的事项
+6. 免责声明：提示此为AI辅助诊断，最终诊断需由专业医生确定
 
 请用中文回复，结构化输出。"""
     else:
         prompt = custom_prompt
 
     try:
-        ai_request = {"prompt": prompt}
-        if image_base64:
-            ai_request["image"] = image_base64
-
-        response = requests.post(
-            f"{AI_SERVICE_URL}/chat",
-            json=ai_request,
-            timeout=180
-        )
-
-        if response.status_code == 200:
-            ai_result = response.json()
-            reply = ai_result.get("reply", "AI 未能生成有效建议")
-            return jsonify({
-                "success": True,
-                "interpretation": reply,
-                "detections_count": len(detections)
-            })
+        # 获取AI配置
+        ai_config = get_ai_settings()
+        provider = ai_config['provider']
+        
+        # 根据提供商调用不同的AI服务
+        if provider == 'local':
+            reply = call_local_ai(prompt, image_base64)
+        elif provider == 'openai':
+            reply = call_openai_api(prompt, ai_config['api_key'], ai_config['model'])
+        elif provider == 'custom':
+            reply = call_custom_api(prompt, ai_config['api_url'], ai_config['api_key'], ai_config['model'])
+        elif provider == 'modelscope':
+            reply = call_modelscope_api(prompt, ai_config['api_key'], ai_config['model'], image_base64)
         else:
-            return jsonify({
-                "error": "AI 服务响应失败",
-                "details": response.text
-            }), 502
+            return jsonify({"error": "未知的AI服务提供商"}), 400
+        
+        return jsonify({
+            "success": True,
+            "interpretation": reply,
+            "detections_count": len(detections),
+            "ai_provider": provider
+        })
 
     except requests.exceptions.ConnectionError:
         return jsonify({
             "error": "无法连接到 AI 服务",
-            "hint": "请确保 AI 服务已启动（python AI/app.py）"
+            "hint": "请检查AI服务配置和网络连接"
         }), 503
     except requests.exceptions.Timeout:
         return jsonify({"error": "AI 服务响应超时"}), 504
@@ -716,6 +939,88 @@ def confidence_series():
         for r in rows
     ]
     return jsonify(data)
+
+
+@app.route("/api/analysis/user_confidence_series", methods=["GET"])
+@require_auth
+def user_confidence_series():
+    """
+    返回当前用户最近 100 条检测的置信度序列，按时间升序
+    """
+    from datetime import timedelta
+    user = get_current_user()
+    
+    rows = (DetectionHistory.query
+            .filter_by(username=user.username)
+            .order_by(DetectionHistory.timestamp.desc())
+            .limit(100)
+            .all())[::-1]          # 升序，图表从左到右
+
+    data = [
+        {
+            # 将UTC时间转换为本地时间（中国时区 UTC+8）
+            "timestamp": (r.timestamp + timedelta(hours=8)).strftime("%m-%d %H:%M:%S"),
+            "confidence": round(float(r.confidence or 0), 3)
+        }
+        for r in rows
+    ]
+    return jsonify(data)
+
+
+@app.route("/api/analysis/user_stats", methods=["GET"])
+@require_auth
+def user_stats():
+    """
+    返回当前用户的检测统计数据
+    """
+    user = get_current_user()
+    
+    # 总检测次数
+    total_detections = DetectionHistory.query.filter_by(username=user.username).count()
+    
+    # 模型使用统计
+    models_used = {}
+    histories = DetectionHistory.query.filter_by(username=user.username).all()
+    for history in histories:
+        model = history.model
+        models_used[model] = models_used.get(model, 0) + 1
+    
+    # 检测类别统计
+    classes_detected = {}
+    for history in histories:
+        if history.fracture_types:
+            for fracture_type in history.fracture_types:
+                classes_detected[fracture_type] = classes_detected.get(fracture_type, 0) + 1
+    
+    # 平均置信度
+    total_confidence = 0
+    confidence_count = 0
+    for history in histories:
+        if history.confidence:
+            total_confidence += float(history.confidence)
+            confidence_count += 1
+    avg_confidence = total_confidence / confidence_count if confidence_count > 0 else 0
+    
+    # 最近检测
+    recent_detections = []
+    recent_histories = DetectionHistory.query.filter_by(username=user.username).order_by(DetectionHistory.timestamp.desc()).limit(5).all()
+    for history in recent_histories:
+        recent_detections.append({
+            "id": history.id,
+            "timestamp": history.timestamp,
+            "model": history.model,
+            "count": history.count,
+            "confidence": history.confidence,
+            "fracture_types": history.fracture_types
+        })
+    
+    return jsonify({
+        "total_detections": total_detections,
+        "models_used": models_used,
+        "classes_detected": classes_detected,
+        "avg_confidence": avg_confidence,
+        "recent_detections": recent_detections
+    })
 
 
 # ==================== 操作日志接口（借鉴pear-admin-flask）====================
@@ -1385,6 +1690,89 @@ def camera_detect():
         return jsonify({"error": str(e)}), 500
 
 
+# ==================== 验证码接口 ====================
+
+@app.route("/api/captcha", methods=["GET"])
+def generate_captcha():
+    """生成验证码"""
+    # 生成4位随机验证码
+    captcha_text = "".join([random.choice("0123456789ABCDEFGHJKLMNPQRSTUVWXYZ") for _ in range(4)])
+    
+    # 保存到session
+    session['captcha'] = captcha_text
+    
+    # 创建验证码图像
+    width, height = 120, 40
+    image = Image.new('RGB', (width, height), (255, 255, 255))
+    draw = ImageDraw.Draw(image)
+    
+    # 添加噪点
+    for _ in range(50):
+        x = random.randint(0, width)
+        y = random.randint(0, height)
+        draw.point((x, y), fill=(random.randint(0, 255), random.randint(0, 255), random.randint(0, 255)))
+    
+    # 添加干扰线
+    for _ in range(5):
+        x1 = random.randint(0, width)
+        y1 = random.randint(0, height)
+        x2 = random.randint(0, width)
+        y2 = random.randint(0, height)
+        draw.line((x1, y1, x2, y2), fill=(random.randint(0, 255), random.randint(0, 255), random.randint(0, 255)), width=1)
+    
+    # 绘制验证码文本
+    try:
+        # 尝试使用系统字体
+        font = ImageFont.truetype("arial.ttf", 24)
+    except:
+        # 如果没有arial字体，使用默认字体
+        font = ImageFont.load_default()
+    
+    # 计算文本位置
+    # 使用textbbox替代textsize（Pillow 9.0+）
+    bbox = draw.textbbox((0, 0), captcha_text, font=font)
+    text_width = bbox[2] - bbox[0]
+    text_height = bbox[3] - bbox[1]
+    x = (width - text_width) // 2
+    y = (height - text_height) // 2
+    
+    # 绘制文本
+    draw.text((x, y), captcha_text, font=font, fill=(0, 0, 0))
+    
+    # 转换为字节流
+    buffer = io.BytesIO()
+    image.save(buffer, format='PNG')
+    buffer.seek(0)
+    
+    # 返回图像
+    from flask import send_file
+    return send_file(buffer, mimetype='image/png')
+
+
+@app.route("/api/captcha/verify", methods=["POST"])
+def verify_captcha():
+    """验证验证码"""
+    data = request.json
+    captcha = data.get("captcha", "").strip().upper()
+    
+    if not captcha:
+        return jsonify({"error": "验证码不能为空"}), 400
+    
+    # 从session获取验证码
+    session_captcha = session.get('captcha', '').upper()
+    
+    if not session_captcha:
+        return jsonify({"error": "验证码已过期"}), 400
+    
+    if captcha != session_captcha:
+        return jsonify({"error": "验证码错误"}), 400
+    
+    # 验证成功后清除session中的验证码
+    session.pop('captcha', None)
+    
+    return jsonify({"success": True, "message": "验证码验证成功"})
+
+
 # ==================== 模型训练管理接口 ====================
 
 # 训练任务管理
@@ -1820,6 +2208,7 @@ def train_model_task(task_id, model_id, base_model_path, dataset_dir, epochs, ba
             # 开始训练
             # 注意：对于CBAM模型，pretrained=False因为我们已经加载了修改后的模型
             # 添加 amp=False 来避免 PyTorch 2.6 的 weights_only 兼容性问题
+            # 添加 workers=0 和 pin_memory=False 来避免 CUDA 内存映射错误
             results = model.train(
                 data=data_yaml,
                 epochs=epochs,
@@ -1830,7 +2219,9 @@ def train_model_task(task_id, model_id, base_model_path, dataset_dir, epochs, ba
                 exist_ok=True,
                 verbose=True,
                 pretrained=False if use_cbam else True,  # CBAM模型不使用预训练权重加载
-                amp=False  # 禁用 AMP 以避免 PyTorch 2.6 兼容性问题
+                amp=False,  # 禁用 AMP 以避免 PyTorch 2.6 兼容性问题
+                workers=0,  # 禁用多进程数据加载，避免 CUDA 内存映射错误
+                pin_memory=False  # 禁用 pin_memory，避免 CUDA 资源冲突
             )
             
             # 重新获取对象（避免会话过期）
