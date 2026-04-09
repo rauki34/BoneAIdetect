@@ -1,29 +1,26 @@
-# 医学骨折检测分析系统
+# 智慧骨科云平台
 
-基于深度学习的医学影像骨折智能检测平台，集成多模型目标检测、模型训练管理、视频流检测、摄像头实时检测与多模态AI医疗建议生成，为骨科医生提供辅助诊断支持。
+基于深度学习的医学影像骨折智能检测系统，集成YOLO目标检测、AI辅助诊断、患者管理、病历管理等功能，为骨科医生提供全流程诊疗支持。
 
 ---
 
 ## 项目概述
 
-本项目是一个面向医疗场景的骨折检测系统，通过计算机视觉技术自动识别X光片中的骨折部位，并结合大语言模型生成专业的医疗建议。系统采用前后端分离架构，支持多模型切换、自定义模型训练、视频流检测、摄像头实时检测、检测历史管理、数据可视化分析和用户权限控制。
+本项目是一个面向医疗场景的骨折检测与诊疗管理系统，采用前后端分离架构，支持三种角色（管理员/医生/患者）的协同工作。系统通过YOLO计算机视觉技术自动识别X光片中的骨折部位，并结合大语言模型生成专业的医疗建议。
 
 ### 核心功能
 
-- **多模型骨折检测**：支持YOLOv8、YOLOv11、YOLOv12等多个检测模型
-- **CBAM注意力机制**：支持CBAM优化的YOLO模型训练，提升特征提取能力
-- **自定义模型训练**：支持上传数据集训练自定义模型，支持模型续训
-- **视频流检测分析**：支持上传视频文件进行批量检测分析
-- **摄像头实时检测**：支持连接摄像头进行实时检测
-- **AI医疗建议**：基于多模态大模型生成专业诊断建议
-- **检测历史管理**：完整的检测记录存储、查询、删除功能
-- **数据可视化**：置信度趋势分析、模型使用统计、检测类别分布、个人数据统计
-- **用户权限控制**：管理员/普通用户双角色权限体系
-- **亮暗主题切换**：支持亮色/暗色双主题，适配不同使用环境
-- **注册验证码保护**：4位验证码防恶意注册
-- **系统监控**：CPU、内存、磁盘实时监控
-- **文件管理**：上传、下载、删除文件
-- **操作日志**：完整操作审计记录
+- **AI骨折检测**：支持图片、视频、摄像头三种检测方式
+- **多模型支持**：YOLOv8、YOLOv11、YOLOv26及自定义训练模型
+- **患者管理**：完整的患者档案、病历、检查记录管理
+- **医生工作站**：患者管理、病历管理、AI辅助诊断一体化
+- **AI医疗建议**：基于检测结果生成专业诊断建议
+- **消息通知**：医患之间即时通讯
+- **系统公告**：管理员发布公告，定向推送给医生或患者
+- **模型训练管理**：自定义模型训练、超参数优化、模型发布
+- **数据统计分析**：检测趋势、患者统计、工作量统计
+- **操作日志**：完整的操作审计记录
+- **医生入驻审核**：医生注册需管理员审核
 
 ---
 
@@ -33,387 +30,267 @@
 
 | 技术 | 版本 | 用途 |
 |------|------|------|
-| Vue 3 | ^3.4.x | 前端框架，Composition API |
-| Element Plus | ^2.x | UI组件库 |
-| Vite | ^5.x | 构建工具 |
-| Vue Router | ^4.x | 路由管理 |
-| Axios | ^1.x | HTTP请求 |
-| @antv/g2plot | ^2.x | 数据可视化图表 |
-| vue-markdown-render | ^2.x | Markdown渲染 |
+| Vue 3 | ^3.4.31 | 前端框架，Composition API |
+| Element Plus | ^2.7.6 | UI组件库 |
+| Vite | ^5.3.3 | 构建工具 |
+| Vue Router | ^4.4.0 | 路由管理 |
+| Axios | ^1.7.2 | HTTP请求 |
+| ECharts | ^6.0.0 | 数据可视化图表 |
+| @antv/g2plot | ^2.4.31 | 高级图表组件 |
+| vue-markdown-render | ^2.3.0 | Markdown渲染 |
+| html2canvas | ^1.4.1 | 页面截图生成 |
+| jspdf | ^4.2.1 | PDF文档生成 |
+| html2pdf.js | ^0.14.0 | HTML转PDF |
 
 ### 后端技术栈
 
 | 技术 | 版本 | 用途 |
 |------|------|------|
-| Flask | ^3.x | Web框架 |
-| Flask-SQLAlchemy | ^3.x | ORM数据库操作 |
-| Flask-Migrate | ^4.x | 数据库迁移 |
-| Flask-CORS | ^4.x | 跨域处理 |
-| Flask-Sock | ^0.7.x | WebSocket支持 |
-| Werkzeug | ^3.x | 密码加密、WSGI工具 |
-| Ultralytics | ^8.x | YOLO模型推理和训练 |
-| OpenCV | ^4.x | 图像处理 |
-| Pillow | ^10.x | 验证码图像生成 |
+| Flask | ^3.1.2 | Web框架 |
+| Flask-SQLAlchemy | ^3.1.1 | ORM数据库操作 |
+| Flask-Migrate | ^4.1.0 | 数据库迁移 |
+| Flask-CORS | ^6.0.2 | 跨域处理 |
+| Flask-JWT-Extended | ^4.7.1 | JWT认证 |
+| Werkzeug | ^3.1.4 | 密码加密、WSGI工具 |
+| Ultralytics | ^8.4.31 | YOLO模型推理和训练 |
+| PyTorch | ^2.7.1 | 深度学习框架 |
+| OpenCV | ^4.12.0 | 图像处理 |
+| Pillow | ^12.1.0 | 图像处理 |
 | SQLite | 3.x | 轻量级数据库 |
-
-### AI服务技术栈
-
-| 技术 | 版本 | 用途 |
-|------|------|------|
-| Transformers | ^4.x | 大模型加载与推理 |
-| PyTorch | ^2.x | 深度学习框架 |
-| BitsAndBytes | ^0.x | 4-bit模型量化 |
+| Optuna | ^4.8.0 | 超参数优化 |
+| Transformers | ^4.57.3 | 大模型加载 |
+| OpenAI | ^2.14.0 | OpenAI API客户端 |
+| ModelScope | ^1.33.0 | 魔搭社区模型 |
 
 ---
 
 ## 项目结构
 
 ```
-d:\grauateDesign
-├── frontend/                    # 前端项目 (Vue 3 + Vite)
+grauateDesign/
+├── frontend/                 # 前端项目
 │   ├── src/
-│   │   ├── views/              # 页面组件
-│   │   │   ├── Home.vue        # 首页（数据分析仪表盘）
-│   │   │   ├── Detection.vue   # 图片检测页面
-│   │   │   ├── VideoStreamDetection.vue  # 视频流检测页面
-│   │   │   ├── CameraDetection.vue       # 摄像头实时检测页面
-│   │   │   ├── ModelTraining.vue        # 模型训练管理页面
-│   │   │   ├── UserManagement.vue        # 用户管理页面
-│   │   │   ├── OperationLog.vue          # 操作日志页面
-│   │   │   ├── FileManager.vue           # 文件管理页面
-│   │   │   ├── SystemMonitor.vue         # 系统监控页面
-│   │   │   ├── Login.vue                 # 登录页面
-│   │   │   └── Register.vue              # 注册页面（含验证码）
-│   │   ├── router/                       # 路由配置
-│   │   ├── utils/                        # 工具函数（axios封装）
-│   │   ├── App.vue                       # 根组件
-│   │   ├── main.js                       # 入口文件
-│   │   └── style.css                     # 全局样式（亮暗主题）
+│   │   ├── components/      # 公共组件
+│   │   │   ├── AIAssistant.vue           # AI助手组件
+│   │   │   └── PatientSelector.vue       # 患者选择器
+│   │   ├── views/           # 页面视图
+│   │   │   ├── SmartOrthopedicsLogin.vue # 统一登录入口
+│   │   │   ├── PatientPortal.vue         # 患者端门户
+│   │   │   ├── DoctorWorkstation.vue     # 医生工作站
+│   │   │   ├── AdminApproval.vue         # 管理员后台
+│   │   │   ├── Detection.vue             # 图像检测
+│   │   │   ├── VideoStreamDetection.vue  # 视频流检测
+│   │   │   └── CameraDetection.vue       # 摄像头检测
+│   │   ├── router/          # 路由配置
+│   │   ├── utils/           # 工具函数
+│   │   ├── App.vue
+│   │   └── main.js
 │   ├── package.json
 │   └── vite.config.js
 │
-├── backend/                     # 后端项目 (Flask)
-│   ├── app.py                  # Flask主应用（50+ API接口）
-│   ├── database.py             # 数据库模型定义
-│   ├── reset_admin.py          # 重置管理员账号脚本
-│   ├── train_and_update.py     # 训练更新脚本
-│   ├── requirements.txt        # Python依赖
-│   ├── models/                 # YOLO模型权重文件
-│   │   ├── yolov8.pt          # YOLOv8预训练权重
-│   │   ├── yolo11n.pt         # YOLOv11预训练权重
-│   │   ├── yolo12n.pt         # YOLOv12预训练权重
-│   │   └── cbam_temp_*.pt     # CBAM临时模型文件
-│   ├── yolo_modules/           # 自定义YOLO模块
-│   │   ├── cbam.py            # CBAM注意力机制实现
-│   │   ├── cbam_utils.py      # CBAM工具函数和模型创建
-│   │   ├── bifpn.py           # BiFPN双向特征金字塔网络
-│   │   ├── advanced_loss.py   # 高级损失函数（SIoU、Focal等）
-│   │   ├── dynamic_label_assignment.py  # 动态标签分配策略
-│   │   └── training_config.py # 训练配置优化
-│   ├── uploads/                # 上传文件存储
-│   │   ├── datasets/          # 训练数据集
-│   │   └── training_runs/     # 训练结果
-│   ├── results/                # 检测结果图片存储
-│   ├── files/                  # 用户上传文件
-│   ├── runs/                   # 模型运行结果
-│   └── instance/
-│       └── bone_detection.db   # SQLite数据库
+├── backend/                  # 后端项目
+│   ├── app.py               # 主应用入口（约6500行）
+│   ├── database.py          # 数据库模型定义
+│   ├── train_and_update.py  # 模型训练脚本
+│   ├── hyperparameter_optimization.py  # 超参数优化
+│   ├── reset_admin.py       # 管理员重置
+│   ├── API文档.md           # 详细API文档
+│   ├── requirements.txt     # Python依赖
+│   ├── models/              # YOLO模型文件
+│   ├── uploads/             # 上传文件存储
+│   ├── results/             # 检测结果存储
+│   └── instance/            # SQLite数据库文件
 │
-├── AI/                         # AI服务 (Qwen3-VL多模态大模型)
-│   ├── app.py                 # Flask AI服务应用
-│   ├── requirements.txt        # Python依赖
-│   └── Qwen3-VL-4B-Instruct/   # 多模态大模型文件
-│       ├── config.json
-│       ├── tokenizer.json
-│       └── ...
+├── AI/                       # AI服务
+│   ├── app.py               # AI服务入口
+│   ├── Qwen3-VL-4B-Instruct/ # 多模态大模型
+│   └── requirements.txt
 │
-├── dataset/                    # 数据集
-│   └── break-bone/            # 骨折检测数据集
-│       ├── train/             # 训练集
-│       ├── valid/             # 验证集
-│       └── data.yaml          # 数据集配置
+├── dataset/                  # 数据集
+│   └── break-bone/          # 骨折检测数据集
 │
-├── venv/                       # Python虚拟环境
+├── venv/                     # Python虚拟环境
 │
-├── instance/                   # 实例目录（数据库）
-│   └── bone_detection.db
-│
-├── 项目大纲.md                 # 项目详细大纲文档
-├── README.md                   # 项目说明文档
-├── CBAM使用说明.md            # CBAM注意力机制说明
-├── AI服务配置说明.md          # AI服务配置说明
-└── requirements-all.txt        # 全部依赖汇总
+└── testpackage/             # 测试资源
+    ├── 测试图片/
+    ├── 测试视频/
+    └── 测试数据集/
 ```
 
 ---
 
-## 核心功能模块
-
-### 1. 图片检测 (Detection.vue)
-- 支持图片上传和预览
-- 多模型选择（系统模型+自定义模型）
-- 实时检测结果显示（原图与结果图对比）
-- 检测详情表格展示（类别、置信度、检测框坐标）
-- AI医疗建议生成与保存
-
-### 2. 视频流检测 (VideoStreamDetection.vue)
-- 上传视频文件进行检测
-- WebSocket实时推送检测结果
-- 逐帧检测与结果展示
-- 检测统计和进度显示
-
-### 3. 摄像头实时检测 (CameraDetection.vue)
-- 摄像头设备选择和预览
-- 实时检测和结果展示
-- 检测框实时绘制
-
-### 4. 模型训练管理 (ModelTraining.vue)
-- 上传数据集训练新模型
-- 支持YOLOv8/11/12作为基础模型
-- **CBAM注意力机制**：支持YOLOv8-CBAM、YOLO11-CBAM优化模型训练
-- **支持模型续训**：在已有模型基础上继续训练
-- 训练任务实时监控（进度、损失、轮数）
-- 模型性能指标展示（mAP50、mAP50-95、Fitness）
-- **模型状态管理**：发布/禁用/启用/删除完整生命周期管理
-
-### 5. 数据分析 (Home.vue)
-- 数字化智能仪表盘
-- 检测统计概览（总检测次数、已用模型数、检测类别数、平均置信度）
-- 模型使用统计与性能对比
-- 检测类别分布统计
-- 置信度趋势折线图
-- **用户个性化数据**：普通用户查看个人检测统计
-
-### 6. 用户管理 (UserManagement.vue)
-- 用户列表展示
-- 创建/编辑/删除用户
-- 角色分配（管理员/普通用户）
-- 密码重置
-
-### 7. 操作日志 (OperationLog.vue)
-- 完整操作记录（用户、方法、URL、描述、结果）
-- 日志查询和筛选
-- 日志清除
-
-### 8. 文件管理 (FileManager.vue)
-- 文件上传和存储
-- 文件下载
-- 文件删除
-- 文件大小格式化显示
-
-### 9. 系统监控 (SystemMonitor.vue)
-- CPU使用率实时监控
-- 内存使用情况
-- 磁盘空间监控
-- 系统信息展示
-
----
-
-## API 接口说明
-
-### 用户认证
-| 接口 | 方法 | 说明 |
-|------|------|------|
-| /api/login | POST | 用户登录 |
-| /api/register | POST | 用户注册（含验证码） |
-| /api/captcha | GET | 获取验证码图片 |
-| /api/captcha/verify | POST | 验证验证码 |
-
-### 检测功能
-| 接口 | 方法 | 说明 |
-|------|------|------|
-| /api/predict | POST | 图片检测 |
-| /api/video/detect | POST | 视频检测启动 |
-| /api/camera/detect | POST | 摄像头单帧检测 |
-| /ws/video/<task_id> | WebSocket | 视频检测实时推送 |
-
-### 模型训练
-| 接口 | 方法 | 说明 |
-|------|------|------|
-| /api/models | GET | 获取所有模型 |
-| /api/models/published | GET | 获取已发布模型 |
-| /api/models/train | POST | 开始训练 |
-| /api/models/<id>/publish | POST | 发布模型 |
-| /api/models/<id>/disable | POST | 禁用模型 |
-| /api/models/<id>/enable | POST | 启用模型 |
-| /api/models/<id> | DELETE | 删除模型 |
-| /api/training/tasks | GET | 获取训练任务列表 |
-| /api/training/tasks/<id>/progress | GET | 获取训练进度 |
-| /api/training/tasks/<id>/stop | POST | 终止训练任务 |
-
-### 历史管理
-| 接口 | 方法 | 说明 |
-|------|------|------|
-| /api/history | GET | 获取检测历史 |
-| /api/history/<id> | GET | 获取历史详情 |
-| /api/history/<id> | DELETE | 删除历史记录 |
-| /api/history/clear/all | DELETE | 清空所有历史 |
-| /api/history/<id>/advice | POST | 保存医疗建议 |
-
-### 数据分析
-| 接口 | 方法 | 说明 |
-|------|------|------|
-| /api/analysis | GET | 获取统计数据（管理员） |
-| /api/analysis/confidence_series | GET | 置信度趋势（管理员） |
-| /api/analysis/user_confidence_series | GET | 个人置信度趋势 |
-| /api/analysis/user_stats | GET | 个人检测统计 |
-| /api/interpret | POST | AI解读生成 |
-
-### 用户管理
-| 接口 | 方法 | 说明 |
-|------|------|------|
-| /api/users | GET | 获取用户列表 |
-| /api/users | POST | 创建用户 |
-| /api/users/<id> | PUT | 更新用户 |
-| /api/users/<id> | DELETE | 删除用户 |
-
-### 系统管理
-| 接口 | 方法 | 说明 |
-|------|------|------|
-| /api/settings | GET | 获取设置 |
-| /api/settings | POST | 更新设置 |
-| /api/logs | GET | 获取操作日志 |
-| /api/logs/<id> | DELETE | 删除日志 |
-| /api/logs/clear | DELETE | 清空日志 |
-| /api/monitor/system | GET | 系统监控信息 |
-| /api/monitor/stats | GET | 系统统计 |
-
-### 文件管理
-| 接口 | 方法 | 说明 |
-|------|------|------|
-| /api/files | GET | 获取文件列表 |
-| /api/files/upload | POST | 上传文件 |
-| /api/files/download/<id> | GET | 下载文件 |
-| /api/files/<id> | DELETE | 删除文件 |
-
----
-
-## 模型训练说明
-
-### 数据集格式
-上传的ZIP文件需要包含YOLO格式的数据集：
-```
-dataset.zip
-├── train/
-│   ├── images/
-│   └── labels/
-├── valid/
-│   ├── images/
-│   └── labels/
-└── data.yaml
-```
-
-### 训练参数
-- **基础模型**：YOLOv8/11/12、YOLOv8-CBAM、YOLO11-CBAM 或已训练的自定义模型（续训）
-- **训练轮数**：10-500
-- **批次大小**：1-64
-- **图像尺寸**：320/416/640
-
-### 模型架构优化
-
-#### CBAM注意力机制
-CBAM（Convolutional Block Attention Module）注意力机制可提升模型特征提取能力：
-- **插入策略**：仅在Backbone深层和Neck部分插入，避免浅层计算开销
-- **适用模型**：YOLOv8-CBAM、YOLO11-CBAM
-- **优势**：捕获全局上下文，增强多尺度特征融合
-
-#### BiFPN双向特征金字塔
-BiFPN（Bidirectional Feature Pyramid Network）增强多尺度特征融合：
-- **可学习权重**：自适应特征融合权重
-- **双向路径**：自顶向下 + 自底向上特征传播
-- **轻量级设计**：FastBiFPN版本适合实时检测
-
-#### 高级损失函数
-- **SIoU Loss**：角度+距离+形状损失，优化边界框回归
-- **Focal Loss**：处理类别不平衡问题
-- **QFL/DFL**：联合学习分类和定位质量
-
-#### 动态标签分配
-- **SimOTA**：动态top-k正样本分配
-- **TaskAlignedAssigner**：任务对齐度量分配
-- **智能切换**：根据训练阶段自动选择最佳策略
-
-**预期性能提升**：
-- mAP@0.5: 0.82-0.88 → 0.90-0.95 (+5-10%)
-- mAP@0.5:0.95: 0.40-0.50 → 0.65-0.75 (+30-50%)
-
----
-
-## 运行说明
+## 快速开始
 
 ### 环境要求
-- Python 3.11+
-- Node.js 18+
-- CUDA 11.8+（如需GPU加速）
-- 6GB+ 显存（AI服务）
 
-### 安装依赖
+- **操作系统**：Windows 10/11 或 Linux
+- **Python**：3.11+
+- **Node.js**：16+
+- **CUDA**：11.8+ (推荐，用于GPU加速)
+- **内存**：16GB+ (推荐)
+- **存储空间**：20GB+ (包含模型文件)
 
-**后端**:
+### 安装步骤
+
+#### 1. 克隆项目
+
 ```bash
-cd backend
-pip install -r requirements.txt
+git clone <repository-url>
+cd grauateDesign
 ```
 
-**AI服务**:
+#### 2. 创建虚拟环境
+
 ```bash
-cd AI
-pip install flask transformers torch pillow bitsandbytes accelerate
+# Windows PowerShell
+python -m venv venv
+venv\Scripts\Activate.ps1
+
+# Windows CMD
+python -m venv venv
+venv\Scripts\activate.bat
+
+# Linux/Mac
+python3 -m venv venv
+source venv/bin/activate
 ```
 
-**前端**:
+#### 3. 安装后端依赖
+
+```bash
+# 安装主后端依赖
+pip install -r backend/requirements.txt
+
+# 安装AI服务依赖
+pip install -r AI/requirements.txt
+```
+
+#### 4. 安装前端依赖
+
 ```bash
 cd frontend
 npm install
+cd ..
 ```
 
 ### 启动服务
 
-**1. 启动后端服务**:
+#### 方式一：手动启动（开发模式）
+
+**终端1 - 启动Flask后端：**
 ```bash
+# 确保虚拟环境已激活
 cd backend
 python app.py
-# 服务运行在 http://127.0.0.1:5000
+# 服务运行在 http://localhost:5000
 ```
 
-**2. 启动AI服务**:
+**终端2 - 启动AI服务：**
 ```bash
+# 确保虚拟环境已激活
 cd AI
 python app.py
-# 服务运行在 http://127.0.0.1:8000
+# 服务运行在 http://localhost:8000
 ```
 
-**3. 启动前端**:
+**终端3 - 启动前端：**
 ```bash
 cd frontend
 npm run dev
 # 服务运行在 http://localhost:5173
 ```
 
+#### 方式二：生产部署
+
+```bash
+# 构建前端
+cd frontend
+npm run build
+
+# 使用Gunicorn启动后端（Linux）
+cd ../backend
+gunicorn -w 4 -b 0.0.0.0:5000 app:app
+
+# Windows可使用 waitress
+waitress-serve --port=5000 app:app
+```
+
+### 访问系统
+
+- **前端界面**：http://localhost:5173 (开发) / http://localhost:80 (生产)
+- **后端API**：http://localhost:5000
+- **AI服务**：http://localhost:8000
+
 ### 默认账号
-- 用户名: admin
-- 密码: 123456
+
+- **管理员**：用户名: `admin`，密码: `123456`
 
 ---
 
-## 技术亮点
+## 功能模块详解
 
-1. **多模型支持**：支持YOLOv8/11/12及自定义模型，动态加载无需重启
-2. **CBAM注意力机制**：集成CBAM模块优化YOLO模型，提升特征提取能力
-3. **BiFPN特征金字塔**：双向特征融合网络，增强多尺度检测能力
-4. **高级损失函数**：SIoU、EIoU、Focal Loss、QFL、DFL等优化损失
-5. **动态标签分配**：SimOTA、TaskAlignedAssigner智能分配策略
-6. **模型训练与续训**：完整的训练流程，支持常规训练和CBAM优化训练
-7. **模型生命周期管理**：支持发布/禁用/启用/删除，删除时自动清理关联文件
-8. **实时检测**：WebSocket实现视频流和摄像头的实时检测
-9. **AI辅助诊断**：集成多模态大模型生成专业医疗建议
-10. **4-bit量化**：大模型量化技术降低显存需求
-11. **亮暗双主题**：完整的主题切换适配
-12. **权限管理**：基于角色的访问控制（RBAC）
-13. **数据可视化**：置信度趋势、模型统计、类别分布、个人数据
-14. **注册验证码**：4位验证码保护，防止恶意注册
-15. **系统监控**：CPU、内存、磁盘实时监控
-16. **操作日志**：完整的操作审计记录
+### 1. 统一登录入口
+
+- 支持患者、医生、管理员三种角色
+- 图形验证码保护
+- 医生可申请入驻，需管理员审核
+- 自动根据角色跳转对应首页
+
+### 2. 患者端功能
+
+- **个人概览**：查看基本信息、主治医生、最新病历
+- **我的病历**：查看所有病历记录
+- **主治医师**：查看主治医生信息
+- **检查报告**：查看AI检测报告
+- **消息通知**：接收医生消息和系统公告
+- **AI咨询**：与AI助手对话咨询
+
+### 3. 医生工作站
+
+- **工作台首页**：统计数据、待办事项、快捷入口
+- **患者管理**：我的患者列表、添加患者、患者详情
+- **病历管理**：创建病历、编辑病历、病历列表
+- **AI辅助诊断**：图片检测、视频检测、摄像头检测
+- **检查报告**：查看所有检测报告
+- **检测历史**：历史检测记录查询
+- **消息通知**：与患者沟通、接收系统消息
+
+### 4. 管理员后台
+
+- **仪表盘**：系统统计数据、趋势图表
+- **用户管理**：创建/编辑/删除用户、重置密码
+- **医生审核**：审核医生入驻申请
+- **模型管理**：发布/禁用/删除模型
+- **训练任务**：查看训练进度、停止任务
+- **系统监控**：CPU、内存、磁盘监控
+- **操作日志**：查看系统操作记录
+- **公告管理**：发布公告、定向推送
+
+### 5. AI检测模块
+
+- **图片检测**：上传单张或多张图片检测
+- **视频检测**：上传视频文件逐帧检测
+- **摄像头检测**：实时摄像头检测
+- **多模型切换**：支持YOLOv8/11/26及自定义模型
+- **患者关联**：检测结果可关联到患者档案
+- **AI解读**：基于检测结果生成医疗建议
+
+### 6. 模型训练模块
+
+- **数据集管理**：上传YOLO格式数据集
+- **训练配置**：设置轮数、批次大小、图像尺寸
+- **超参数优化**：基于Optuna自动优化超参数
+- **训练监控**：实时查看训练进度和损失曲线
+- **模型评估**：自动计算mAP、Precision、Recall、F1
+- **模型发布**：训练完成后发布供使用
+
+### 7. 数据统计分析
+
+- **检测趋势**：按日/周/月统计检测数量
+- **置信度趋势**：检测置信度变化曲线
+- **患者统计**：年龄段分布、性别分布
+- **工作量统计**：医生工作量统计
+- **模型使用统计**：各模型使用频率
 
 ---
 
@@ -421,35 +298,96 @@ npm run dev
 
 | 表名 | 说明 | 主要字段 |
 |------|------|----------|
-| users | 用户表 | username, password, role, created_at |
-| detection_history | 检测历史 | username, filename, model, detections, confidence, medical_advice |
-| custom_models | 自定义模型 | name, model_key, status, accuracy, map50, map50_95 |
+| users | 用户表 | username, password, role, full_name, email, phone |
+| doctor_profiles | 医生资料 | user_id, department, title, license_number, hospital, status |
+| patient_profiles | 患者资料 | user_id, patient_number, gender, birth_date, address, allergies |
+| doctor_patient_relations | 医患关系 | doctor_id, patient_id, is_primary, status |
+| detection_history | 检测历史 | username, patient_id, filename, model, detections, confidence, medical_advice |
+| medical_records | 病历记录 | record_number, patient_id, doctor_id, diagnosis, treatment, prescription |
+| custom_models | 自定义模型 | name, model_key, status, accuracy, map50, map50_95, precision, recall, f1_score |
 | training_tasks | 训练任务 | model_id, epochs, progress, status, loss, val_loss |
-| system_settings | 系统设置 | key, value, description |
+| doctor_registrations | 医生注册申请 | username, full_name, department, title, license_number, status |
+| announcements | 系统公告 | title, content, target_role, priority, is_active |
+| messages | 消息通知 | sender_id, receiver_id, title, content, message_type, is_read |
 | operation_logs | 操作日志 | username, method, url, description, success, ip |
-| file_records | 文件记录 | filename, original_name, file_size, uploader, mime_type |
+| ai_conversations | AI对话 | patient_id, session_id, message_type, message_content |
+
+---
+
+## API接口概览
+
+### 认证接口
+- `POST /api/login` - 用户登录
+- `POST /api/register` - 用户注册
+- `POST /api/logout` - 用户登出
+- `GET /api/captcha` - 获取验证码
+
+### 检测接口
+- `POST /api/predict` - 图像检测
+- `POST /api/video/detect` - 视频检测
+- `POST /api/camera/detect` - 摄像头检测
+- `GET /api/history` - 检测历史
+
+### 患者管理接口
+- `GET/POST /api/patients` - 患者列表/创建
+- `GET/PUT/DELETE /api/patients/{id}` - 患者详情/更新/删除
+- `GET /api/patient/doctors` - 患者的主治医生
+- `GET /api/patient/medical-records` - 患者的病历
+
+### 医生管理接口
+- `GET /api/doctor/patients` - 医生的患者列表
+- `POST /api/doctor/patients` - 医生添加患者
+- `GET/POST /api/doctor/medical-records` - 病历列表/创建
+- `GET /api/doctor/dashboard` - 医生工作台数据
+- `POST /api/doctor/register` - 医生入驻申请
+
+### 管理员接口
+- `GET/POST /api/users` - 用户列表/创建
+- `GET /api/admin/doctor-registrations` - 医生注册审核列表
+- `POST /api/admin/doctor-registrations/{id}/review` - 审核医生注册
+- `GET /api/admin/dashboard` - 管理员仪表盘
+- `GET /api/admin/statistics` - 系统统计
+
+### 模型管理接口
+- `GET /api/models` - 模型列表
+- `GET /api/models/published` - 已发布模型
+- `POST /api/models/train` - 创建训练任务
+- `POST /api/models/{id}/publish` - 发布模型
+- `GET /api/training/tasks` - 训练任务列表
+
+### 消息通知接口
+- `GET /api/messages/contacts` - 消息联系人
+- `POST /api/messages/send` - 发送消息
+- `GET /api/messages/unread-count` - 未读消息数
+- `GET /api/announcements` - 公告列表
+
+详细API文档请参考：[backend/API文档.md](backend/API文档.md)
+
+---
+
+## 技术亮点
+
+1. **三端分离架构**：患者端、医生端、管理员端独立设计，权限严格分离
+2. **医患关系管理**：支持主治医生与患者的绑定关系
+3. **医生入驻审核**：医生注册需管理员审核，确保资质合规
+4. **多模型支持**：支持YOLOv8/11/26及自定义模型，动态加载
+5. **AI辅助诊断**：集成多模态大模型生成专业医疗建议
+6. **实时通讯**：医患之间即时消息通知
+7. **模型生命周期管理**：训练→评估→发布→禁用完整流程
+8. **超参数优化**：基于Optuna的贝叶斯自动优化
+9. **操作审计**：完整的操作日志记录
+10. **数据可视化**：ECharts图表展示统计数据
 
 ---
 
 ## 相关文档
 
-- [项目大纲](项目大纲.md) - 详细的项目架构和功能说明
-- [CBAM使用说明](CBAM使用说明.md) - CBAM注意力机制使用指南
-- [AI服务配置说明](AI服务配置说明.md) - AI服务配置详细说明
+- [backend/API文档.md](backend/API文档.md) - 详细API接口文档
+- [AI服务配置说明.md](AI服务配置说明.md) - AI服务配置说明
+- [项目大纲.md](项目大纲.md) - 项目架构说明
 
 ---
 
-## 未来展望
+## 许可说明
 
-1. **模型优化**：引入更轻量级的检测模型，支持移动端部署
-2. **多模态融合**：结合文本病历信息，提供更精准的诊断建议
-3. **分布式部署**：支持多GPU并行推理，提升并发处理能力
-4. **数据增强**：集成在线数据标注工具，持续优化模型效果
-5. **报告生成**：自动生成标准化诊断报告，支持PDF导出
-6. **多语言支持**：增加英文等多语言界面
-
----
-
-## 许可证
-
-本项目仅供学习和研究使用。
+本项目仅供学习参考，不可用于商业用途
