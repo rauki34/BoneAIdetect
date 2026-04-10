@@ -71,17 +71,25 @@ grauateDesign/
 ├── frontend/                 # 前端项目
 │   ├── src/
 │   │   ├── components/      # 公共组件
-│   │   ├── FloatingAIAssistant.vue   # 悬浮AI助手组件
-│   │   └── PatientSelector.vue       # 患者选择器
+│   │   │   ├── FloatingAIAssistant.vue   # 悬浮AI助手组件
+│   │   │   ├── DoctorRegisterDialog.vue  # 医生注册对话框
+│   │   │   ├── DoctorReportList.vue      # 医生报告列表
+│   │   │   ├── PatientRegisterDialog.vue # 患者注册对话框
+│   │   │   ├── PatientReportList.vue     # 患者报告列表
+│   │   │   ├── PatientSelector.vue       # 患者选择器
+│   │   │   ├── ReportDetail.vue          # 报告详情组件
+│   │   │   └── ReportEditor.vue          # 报告编辑器组件
 │   │   ├── views/           # 页面视图
 │   │   │   ├── SmartOrthopedicsLogin.vue # 统一登录入口
 │   │   │   ├── PatientPortal.vue         # 患者端门户
 │   │   │   ├── DoctorWorkstation.vue     # 医生工作站
 │   │   │   ├── AdminApproval.vue         # 管理员后台
+│   │   │   ├── ModelTraining.vue         # 模型训练页面
 │   │   │   ├── Detection.vue             # 图像检测
 │   │   │   ├── VideoStreamDetection.vue  # 视频流检测
 │   │   │   └── CameraDetection.vue       # 摄像头检测
 │   │   ├── router/          # 路由配置
+│   │   │   └── index.js
 │   │   ├── utils/           # 工具函数
 │   │   ├── App.vue
 │   │   └── main.js
@@ -89,12 +97,11 @@ grauateDesign/
 │   └── vite.config.js
 │
 ├── backend/                  # 后端项目
-│   ├── app.py               # 主应用入口（约6500行）
+│   ├── app.py               # 主应用入口
 │   ├── database.py          # 数据库模型定义
 │   ├── train_and_update.py  # 模型训练脚本
 │   ├── hyperparameter_optimization.py  # 超参数优化
-│   ├── reset_admin.py       # 管理员重置
-│   ├── API文档.md           # 详细API文档
+│   ├── reset_admin.py       # 管理员重置工具
 │   ├── requirements.txt     # Python依赖
 │   ├── models/              # YOLO模型文件
 │   ├── uploads/             # 上传文件存储
