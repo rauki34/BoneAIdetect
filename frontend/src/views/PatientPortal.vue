@@ -718,6 +718,9 @@
         </div>
       </div>
     </el-dialog>
+
+    <!-- AI助手组件 -->
+    <FloatingAIAssistant ref="aiAssistantRef" />
   </div>
 </template>
 
@@ -733,6 +736,7 @@ import VueMarkdown from 'vue-markdown-render'
 import 'github-markdown-css/github-markdown-light.css'
 import axios from '../utils/axios'
 import { formatDate, formatDateTime } from '../utils/datetime'
+import FloatingAIAssistant from '../components/FloatingAIAssistant.vue'
 
 const router = useRouter()
 

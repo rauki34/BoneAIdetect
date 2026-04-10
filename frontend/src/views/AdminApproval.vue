@@ -593,7 +593,7 @@
           <h2 class="page-title">检测系统</h2>
           
           <!-- 检测类型选择 -->
-          <el-card v-if="!currentDetectionType" shadow="never">
+          <el-card v-if="!currentDetectionType" shadow="never" style="margin-bottom: 20px;">
             <div class="detection-modules">
               <el-row :gutter="20">
                 <el-col :span="8">
@@ -627,6 +627,175 @@
             </div>
           </el-card>
           
+          <!-- 检测历史记录列表 -->
+          <el-card v-if="!currentDetectionType" shadow="never">
+            <template #header>
+              <div class="card-header">
+                <span>图片检测历史记录</span>
+                <el-button :icon="Refresh" circle size="small" @click="fetchDetectionHistory" title="刷新" />
+              </div>
+            </template>
+
+            <el-table :data="detectionHistoryList" v-loading="detectionHistoryLoading" stripe>
+              <el-table-column prop="id" label="ID" width="60" />
+              <el-table-column prop="filename" label="文件名" min-width="150" show-overflow-tooltip />
+              <el-table-column prop="patient_name" label="患者" width="120">
+                <template #default="{ row }">
+                  <span v-if="row.patient_name">{{ row.patient_name }}</span>
+                  <span v-else style="color: #909399;">-</span>
+                </template>
+              </el-table-column>
+              <el-table-column prop="doctor_name" label="检测医生" width="120">
+                <template #default="{ row }">
+                  <span v-if="row.doctor_name">{{ row.doctor_name }}</span>
+                  <span v-else style="color: #909399;">-</span>
+                </template>
+              </el-table-column>
+              <el-table-column prop="timestamp" label="检测时间" width="180" />
+              <el-table-column prop="model" label="使用模型" width="100" />
+              <el-table-column label="检测结果" min-width="200">
+                <template #default="{ row }">
+                  <div v-if="row.detections && row.detections.length > 0">
+                    <el-tag
+                      v-for="(det, idx) in row.detections.slice(0, 3)"
+                      :key="idx"
+                      size="small"
+                      style="margin-right: 4px; margin-bottom: 2px;"
+                      :type="det.confidence > 0.8 ? 'danger' : det.confidence > 0.6 ? 'warning' : 'info'"
+                    >
+                      {{ det.class }} ({{ (det.confidence * 100).toFixed(1) }}%)
+                    </el-tag>
+                    <span v-if="row.detections.length > 3" style="color: #909399; font-size: 12px;">
+                      +{{ row.detections.length - 3 }} 更多
+                    </span>
+                  </div>
+                  <span v-else style="color: #909399;">未检测到目标</span>
+                </template>
+              </el-table-column>
+              <el-table-column prop="count" label="检测数" width="80" align="center" />
+              <el-table-column label="置信度" width="100" align="center">
+                <template #default="{ row }">
+                  <el-progress
+                    :percentage="Math.round(row.confidence * 100)"
+                    :color="getConfidenceColor(row.confidence)"
+                    :stroke-width="8"
+                    :show-text="true"
+                  />
+                </template>
+              </el-table-column>
+              <el-table-column label="操作" width="150" fixed="right">
+                <template #default="{ row }">
+                  <el-button type="primary" size="small" link @click="viewDetectionDetail(row)">
+                    查看
+                  </el-button>
+                  <el-button type="danger" size="small" link @click="deleteDetectionHistory(row)">
+                    删除
+                  </el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+
+            <el-empty v-if="!detectionHistoryLoading && detectionHistoryList.length === 0" description="暂无图片检测历史记录" />
+          </el-card>
+
+          <!-- 检测详情对话框 -->
+          <el-dialog
+            v-model="detectionDetailVisible"
+            title="检测详情"
+            width="800px"
+            :close-on-click-modal="false"
+          >
+            <div v-if="selectedDetection" class="detection-detail">
+              <!-- 图片对比 -->
+              <el-row :gutter="20" style="margin-bottom: 20px;">
+                <el-col :span="12">
+                  <div class="image-card">
+                    <div class="image-title">原始图片</div>
+                    <div class="image-wrapper">
+                      <el-image
+                        :src="selectedDetection.original_image"
+                        fit="contain"
+                        :preview-src-list="[selectedDetection.original_image, selectedDetection.result_image]"
+                      />
+                    </div>
+                  </div>
+                </el-col>
+                <el-col :span="12">
+                  <div class="image-card">
+                    <div class="image-title">检测结果</div>
+                    <div class="image-wrapper">
+                      <el-image
+                        :src="selectedDetection.result_image"
+                        fit="contain"
+                        :preview-src-list="[selectedDetection.result_image, selectedDetection.original_image]"
+                      />
+                    </div>
+                  </div>
+                </el-col>
+              </el-row>
+
+              <!-- 基本信息 -->
+              <el-descriptions :column="2" border>
+                <el-descriptions-item label="ID">{{ selectedDetection.id }}</el-descriptions-item>
+                <el-descriptions-item label="文件名">{{ selectedDetection.filename }}</el-descriptions-item>
+                <el-descriptions-item label="患者">{{ selectedDetection.patient_name || '-' }}</el-descriptions-item>
+                <el-descriptions-item label="检测医生">{{ selectedDetection.doctor_name || '-' }}</el-descriptions-item>
+                <el-descriptions-item label="检测时间">{{ selectedDetection.timestamp }}</el-descriptions-item>
+                <el-descriptions-item label="使用模型">{{ selectedDetection.model }}</el-descriptions-item>
+                <el-descriptions-item label="检测数量">{{ selectedDetection.count }}</el-descriptions-item>
+                <el-descriptions-item label="平均置信度">
+                  <el-progress
+                    :percentage="Math.round(selectedDetection.confidence * 100)"
+                    :color="getConfidenceColor(selectedDetection.confidence)"
+                    style="width: 150px;"
+                  />
+                </el-descriptions-item>
+              </el-descriptions>
+
+              <!-- 检测结果详情 -->
+              <div v-if="selectedDetection.detections && selectedDetection.detections.length > 0" style="margin-top: 20px;">
+                <h4>检测详情</h4>
+                <el-table :data="selectedDetection.detections" border size="small">
+                  <el-table-column type="index" label="序号" width="60" align="center" />
+                  <el-table-column prop="class" label="类型" width="150" />
+                  <el-table-column label="置信度" width="200">
+                    <template #default="{ row }">
+                      <el-progress
+                        :percentage="Math.round(row.confidence * 100)"
+                        :color="getConfidenceColor(row.confidence)"
+                        :stroke-width="10"
+                      />
+                    </template>
+                  </el-table-column>
+                  <el-table-column prop="bbox" label="检测框坐标" min-width="200" />
+                </el-table>
+              </div>
+
+              <!-- 医疗建议 -->
+              <div v-if="selectedDetection.medical_advice" style="margin-top: 20px;">
+                <h4>医疗建议</h4>
+                <el-alert type="info" :closable="false">
+                  <div v-if="typeof selectedDetection.medical_advice === 'object'">
+                    <div v-if="selectedDetection.medical_advice.interpretation" class="markdown-body medical-advice-content">
+                      <vue-markdown :source="selectedDetection.medical_advice.interpretation" />
+                    </div>
+                    <div v-else>
+                      <p v-if="selectedDetection.medical_advice.diagnosis"><strong>AI诊断：</strong>{{ selectedDetection.medical_advice.diagnosis }}</p>
+                      <p v-if="selectedDetection.medical_advice.treatment"><strong>治疗建议：</strong>{{ selectedDetection.medical_advice.treatment }}</p>
+                      <p v-if="selectedDetection.medical_advice.precautions"><strong>注意事项：</strong>{{ selectedDetection.medical_advice.precautions }}</p>
+                    </div>
+                  </div>
+                  <div v-else class="markdown-body medical-advice-content">
+                    <vue-markdown :source="selectedDetection.medical_advice" />
+                  </div>
+                </el-alert>
+              </div>
+            </div>
+            <template #footer>
+              <el-button @click="detectionDetailVisible = false">关闭</el-button>
+            </template>
+          </el-dialog>
+
           <!-- 返回按钮 -->
           <div v-if="currentDetectionType" style="margin-bottom: 16px;">
             <el-button @click="currentDetectionType = null">
@@ -860,10 +1029,10 @@
                   </el-tag>
                 </template>
               </el-table-column>
-              <el-table-column prop="metrics" label="mAP" width="100">
+              <el-table-column prop="map50" label="mAP" width="100">
                 <template #default="{ row }">
-                  <span v-if="row.metrics?.map50" :style="{ color: getMetricColor(row.metrics.map50) }">
-                    {{ (row.metrics.map50 * 100).toFixed(1) }}%
+                  <span v-if="row.map50" :style="{ color: getMetricColor(row.map50) }">
+                    {{ (row.map50 * 100).toFixed(1) }}%
                   </span>
                   <span v-else>-</span>
                 </template>
@@ -1710,6 +1879,8 @@ import * as echarts from 'echarts'
 import Detection from './Detection.vue'
 import VideoStreamDetection from './VideoStreamDetection.vue'
 import CameraDetection from './CameraDetection.vue'
+import VueMarkdown from 'vue-markdown-render'
+import 'github-markdown-css/github-markdown-light.css'
 import { formatDate, formatDateTime } from '../utils/datetime'
 
 const router = useRouter()
@@ -1779,6 +1950,68 @@ const datasetUploadHeaders = computed(() => {
 
 // 检测系统相关数据
 const currentDetectionType = ref(null)
+
+// 检测历史记录相关数据
+const detectionHistoryList = ref([])
+const detectionHistoryLoading = ref(false)
+
+// 获取检测历史记录列表（只获取图片检测记录）
+const fetchDetectionHistory = async () => {
+  detectionHistoryLoading.value = true
+  try {
+    const res = await axios.get('/api/history?image_only=true')
+    if (res.data.data) {
+      detectionHistoryList.value = res.data.data || []
+    }
+  } catch (error) {
+    console.error('获取检测历史记录失败:', error)
+    ElMessage.error('获取检测历史记录失败')
+  } finally {
+    detectionHistoryLoading.value = false
+  }
+}
+
+// 查看检测历史记录详情
+const selectedDetection = ref(null)
+const detectionDetailVisible = ref(false)
+
+const viewDetectionDetail = (row) => {
+  selectedDetection.value = row
+  detectionDetailVisible.value = true
+}
+
+// 删除检测历史记录
+const deleteDetectionHistory = async (row) => {
+  try {
+    await ElMessageBox.confirm(
+      `确定要删除这条检测历史记录吗？`,
+      '确认删除',
+      {
+        confirmButtonText: '确定',
+        cancelButtonText: '取消',
+        type: 'warning'
+      }
+    )
+    
+    const res = await axios.delete(`/api/history/${row.id}`)
+    if (res.data.success) {
+      ElMessage.success('删除成功')
+      fetchDetectionHistory()
+    }
+  } catch (error) {
+    if (error !== 'cancel') {
+      console.error('删除检测历史记录失败:', error)
+      ElMessage.error('删除失败')
+    }
+  }
+}
+
+// 根据置信度获取颜色
+const getConfidenceColor = (confidence) => {
+  if (confidence >= 0.8) return '#67c23a'
+  if (confidence >= 0.6) return '#e6a23c'
+  return '#f56c6c'
+}
 
 const systemConfig = reactive({
   name: '智慧骨科云平台',
@@ -2059,7 +2292,11 @@ const handleMenuSelect = (index) => {
   if (index === 'training') {
     loadTrainingModels()
     loadTrainingTasks()
-    loadDatasetsList()
+    loadDatasets()
+  }
+  // 切换到检测系统页面时加载检查记录
+  if (index === 'detection') {
+    fetchDetectionHistory()
   }
   // 切换到数据集管理页面时加载数据
   if (index === 'datasets') {
@@ -3759,6 +3996,81 @@ const handleDatasetPageChange = (page) => {
 .camera-icon { background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%); color: white; }
 .module-title { font-size: 18px; font-weight: 600; color: #1e293b; margin-bottom: 8px; }
 .module-desc { font-size: 14px; color: #64748b; }
+
+/* 检查记录样式 */
+.report-text {
+  display: inline-block;
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #606266;
+}
+.report-text:hover {
+  color: #409eff;
+}
+
+/* 检测详情对话框样式 */
+.detection-detail .image-card {
+  border: 1px solid #e4e7ed;
+  border-radius: 8px;
+  overflow: hidden;
+}
+.detection-detail .image-title {
+  padding: 12px;
+  background: #f5f7fa;
+  border-bottom: 1px solid #e4e7ed;
+  font-weight: 500;
+  text-align: center;
+}
+.detection-detail .image-wrapper {
+  padding: 16px;
+  background: #fff;
+  min-height: 200px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.detection-detail .image-wrapper .el-image {
+  max-width: 100%;
+  max-height: 400px;
+  width: auto;
+  height: auto;
+}
+
+/* 医疗建议样式 */
+.detection-detail .medical-advice-content {
+  padding: 10px;
+  font-size: 14px;
+  line-height: 1.6;
+  color: #303133;
+}
+.detection-detail .medical-advice-content h1,
+.detection-detail .medical-advice-content h2,
+.detection-detail .medical-advice-content h3,
+.detection-detail .medical-advice-content h4 {
+  margin-top: 12px;
+  margin-bottom: 8px;
+  font-weight: 600;
+}
+.detection-detail .medical-advice-content p {
+  margin-bottom: 8px;
+}
+.detection-detail .medical-advice-content table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 10px 0;
+}
+.detection-detail .medical-advice-content table th,
+.detection-detail .medical-advice-content table td {
+  border: 1px solid #dcdfe6;
+  padding: 8px;
+  text-align: left;
+}
+.detection-detail .medical-advice-content table th {
+  background-color: #f5f7fa;
+  font-weight: 600;
+}
 
 /* 统计分析样式 */
 .stat-blue { color: #1890ff; }

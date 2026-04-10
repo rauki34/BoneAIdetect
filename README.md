@@ -2,7 +2,7 @@
 
 基于深度学习的医学影像骨折智能检测系统，集成YOLO目标检测、AI辅助诊断、患者管理、病历管理等功能，为骨科医生提供全流程诊疗支持。
 
----
+***
 
 ## 项目概述
 
@@ -22,47 +22,47 @@
 - **操作日志**：完整的操作审计记录
 - **医生入驻审核**：医生注册需管理员审核
 
----
+***
 
 ## 技术栈
 
 ### 前端技术栈
 
-| 技术 | 版本 | 用途 |
-|------|------|------|
-| Vue 3 | ^3.4.31 | 前端框架，Composition API |
-| Element Plus | ^2.7.6 | UI组件库 |
-| Vite | ^5.3.3 | 构建工具 |
-| Vue Router | ^4.4.0 | 路由管理 |
-| Axios | ^1.7.2 | HTTP请求 |
-| ECharts | ^6.0.0 | 数据可视化图表 |
-| @antv/g2plot | ^2.4.31 | 高级图表组件 |
-| vue-markdown-render | ^2.3.0 | Markdown渲染 |
-| html2canvas | ^1.4.1 | 页面截图生成 |
-| jspdf | ^4.2.1 | PDF文档生成 |
-| html2pdf.js | ^0.14.0 | HTML转PDF |
+| 技术                  | 版本      | 用途                   |
+| ------------------- | ------- | -------------------- |
+| Vue 3               | ^3.4.31 | 前端框架，Composition API |
+| Element Plus        | ^2.7.6  | UI组件库                |
+| Vite                | ^5.3.3  | 构建工具                 |
+| Vue Router          | ^4.4.0  | 路由管理                 |
+| Axios               | ^1.7.2  | HTTP请求               |
+| ECharts             | ^6.0.0  | 数据可视化图表              |
+| @antv/g2plot        | ^2.4.31 | 高级图表组件               |
+| vue-markdown-render | ^2.3.0  | Markdown渲染           |
+| html2canvas         | ^1.4.1  | 页面截图生成               |
+| jspdf               | ^4.2.1  | PDF文档生成              |
+| html2pdf.js         | ^0.14.0 | HTML转PDF             |
 
 ### 后端技术栈
 
-| 技术 | 版本 | 用途 |
-|------|------|------|
-| Flask | ^3.1.2 | Web框架 |
-| Flask-SQLAlchemy | ^3.1.1 | ORM数据库操作 |
-| Flask-Migrate | ^4.1.0 | 数据库迁移 |
-| Flask-CORS | ^6.0.2 | 跨域处理 |
-| Flask-JWT-Extended | ^4.7.1 | JWT认证 |
-| Werkzeug | ^3.1.4 | 密码加密、WSGI工具 |
-| Ultralytics | ^8.4.31 | YOLO模型推理和训练 |
-| PyTorch | ^2.7.1 | 深度学习框架 |
-| OpenCV | ^4.12.0 | 图像处理 |
-| Pillow | ^12.1.0 | 图像处理 |
-| SQLite | 3.x | 轻量级数据库 |
-| Optuna | ^4.8.0 | 超参数优化 |
-| Transformers | ^4.57.3 | 大模型加载 |
-| OpenAI | ^2.14.0 | OpenAI API客户端 |
-| ModelScope | ^1.33.0 | 魔搭社区模型 |
+| 技术                 | 版本      | 用途            |
+| ------------------ | ------- | ------------- |
+| Flask              | ^3.1.2  | Web框架         |
+| Flask-SQLAlchemy   | ^3.1.1  | ORM数据库操作      |
+| Flask-Migrate      | ^4.1.0  | 数据库迁移         |
+| Flask-CORS         | ^6.0.2  | 跨域处理          |
+| Flask-JWT-Extended | ^4.7.1  | JWT认证         |
+| Werkzeug           | ^3.1.4  | 密码加密、WSGI工具   |
+| Ultralytics        | ^8.4.31 | YOLO模型推理和训练   |
+| PyTorch            | ^2.7.1  | 深度学习框架        |
+| OpenCV             | ^4.12.0 | 图像处理          |
+| Pillow             | ^12.1.0 | 图像处理          |
+| SQLite             | 3.x     | 轻量级数据库        |
+| Optuna             | ^4.8.0  | 超参数优化         |
+| Transformers       | ^4.57.3 | 大模型加载         |
+| OpenAI             | ^2.14.0 | OpenAI API客户端 |
+| ModelScope         | ^1.33.0 | 魔搭社区模型        |
 
----
+***
 
 ## 项目结构
 
@@ -117,7 +117,7 @@ grauateDesign/
     └── 测试数据集/
 ```
 
----
+***
 
 ## 快速开始
 
@@ -178,6 +178,7 @@ cd ..
 #### 方式一：手动启动（开发模式）
 
 **终端1 - 启动Flask后端：**
+
 ```bash
 # 确保虚拟环境已激活
 cd backend
@@ -186,6 +187,7 @@ python app.py
 ```
 
 **终端2 - 启动AI服务：**
+
 ```bash
 # 确保虚拟环境已激活
 cd AI
@@ -194,6 +196,7 @@ python app.py
 ```
 
 **终端3 - 启动前端：**
+
 ```bash
 cd frontend
 npm run dev
@@ -217,15 +220,15 @@ waitress-serve --port=5000 app:app
 
 ### 访问系统
 
-- **前端界面**：http://localhost:5173 (开发) / http://localhost:80 (生产)
-- **后端API**：http://localhost:5000
-- **AI服务**：http://localhost:8000
+- **前端界面**：<http://localhost:5173> (开发) / <http://localhost:80> (生产)
+- **后端API**：<http://localhost:5000>
+- **AI服务**：<http://localhost:8000>
 
 ### 默认账号
 
 - **管理员**：用户名: `admin`，密码: `123456`
 
----
+***
 
 ## 功能模块详解
 
@@ -262,7 +265,6 @@ waitress-serve --port=5000 app:app
 - **医生审核**：审核医生入驻申请
 - **模型管理**：发布/禁用/删除模型
 - **训练任务**：查看训练进度、停止任务
-- **系统监控**：CPU、内存、磁盘监控
 - **操作日志**：查看系统操作记录
 - **公告管理**：发布公告、定向推送
 
@@ -292,49 +294,53 @@ waitress-serve --port=5000 app:app
 - **工作量统计**：医生工作量统计
 - **模型使用统计**：各模型使用频率
 
----
+***
 
 ## 数据库表结构
 
-| 表名 | 说明 | 主要字段 |
-|------|------|----------|
-| users | 用户表 | username, password, role, full_name, email, phone |
-| doctor_profiles | 医生资料 | user_id, department, title, license_number, hospital, status |
-| patient_profiles | 患者资料 | user_id, patient_number, gender, birth_date, address, allergies |
-| doctor_patient_relations | 医患关系 | doctor_id, patient_id, is_primary, status |
-| detection_history | 检测历史 | username, patient_id, filename, model, detections, confidence, medical_advice |
-| medical_records | 病历记录 | record_number, patient_id, doctor_id, diagnosis, treatment, prescription |
-| custom_models | 自定义模型 | name, model_key, status, accuracy, map50, map50_95, precision, recall, f1_score |
-| training_tasks | 训练任务 | model_id, epochs, progress, status, loss, val_loss |
-| doctor_registrations | 医生注册申请 | username, full_name, department, title, license_number, status |
-| announcements | 系统公告 | title, content, target_role, priority, is_active |
-| messages | 消息通知 | sender_id, receiver_id, title, content, message_type, is_read |
-| operation_logs | 操作日志 | username, method, url, description, success, ip |
-| ai_conversations | AI对话 | patient_id, session_id, message_type, message_content |
+| 表名                         | 说明     | 主要字段                                                                               |
+| -------------------------- | ------ | ---------------------------------------------------------------------------------- |
+| users                      | 用户表    | username, password, role, full\_name, email, phone                                 |
+| doctor\_profiles           | 医生资料   | user\_id, department, title, license\_number, hospital, status                     |
+| patient\_profiles          | 患者资料   | user\_id, patient\_number, gender, birth\_date, address, allergies                 |
+| doctor\_patient\_relations | 医患关系   | doctor\_id, patient\_id, is\_primary, status                                       |
+| detection\_history         | 检测历史   | username, patient\_id, filename, model, detections, confidence, medical\_advice    |
+| medical\_records           | 病历记录   | record\_number, patient\_id, doctor\_id, diagnosis, treatment, prescription        |
+| custom\_models             | 自定义模型  | name, model\_key, status, accuracy, map50, map50\_95, precision, recall, f1\_score |
+| training\_tasks            | 训练任务   | model\_id, epochs, progress, status, loss, val\_loss                               |
+| doctor\_registrations      | 医生注册申请 | username, full\_name, department, title, license\_number, status                   |
+| announcements              | 系统公告   | title, content, target\_role, priority, is\_active                                 |
+| messages                   | 消息通知   | sender\_id, receiver\_id, title, content, message\_type, is\_read                  |
+| operation\_logs            | 操作日志   | username, method, url, description, success, ip                                    |
+| ai\_conversations          | AI对话   | patient\_id, session\_id, message\_type, message\_content                          |
 
----
+***
 
 ## API接口概览
 
 ### 认证接口
+
 - `POST /api/login` - 用户登录
 - `POST /api/register` - 用户注册
 - `POST /api/logout` - 用户登出
 - `GET /api/captcha` - 获取验证码
 
 ### 检测接口
+
 - `POST /api/predict` - 图像检测
 - `POST /api/video/detect` - 视频检测
 - `POST /api/camera/detect` - 摄像头检测
 - `GET /api/history` - 检测历史
 
 ### 患者管理接口
+
 - `GET/POST /api/patients` - 患者列表/创建
 - `GET/PUT/DELETE /api/patients/{id}` - 患者详情/更新/删除
 - `GET /api/patient/doctors` - 患者的主治医生
 - `GET /api/patient/medical-records` - 患者的病历
 
 ### 医生管理接口
+
 - `GET /api/doctor/patients` - 医生的患者列表
 - `POST /api/doctor/patients` - 医生添加患者
 - `GET/POST /api/doctor/medical-records` - 病历列表/创建
@@ -342,6 +348,7 @@ waitress-serve --port=5000 app:app
 - `POST /api/doctor/register` - 医生入驻申请
 
 ### 管理员接口
+
 - `GET/POST /api/users` - 用户列表/创建
 - `GET /api/admin/doctor-registrations` - 医生注册审核列表
 - `POST /api/admin/doctor-registrations/{id}/review` - 审核医生注册
@@ -349,6 +356,7 @@ waitress-serve --port=5000 app:app
 - `GET /api/admin/statistics` - 系统统计
 
 ### 模型管理接口
+
 - `GET /api/models` - 模型列表
 - `GET /api/models/published` - 已发布模型
 - `POST /api/models/train` - 创建训练任务
@@ -356,6 +364,7 @@ waitress-serve --port=5000 app:app
 - `GET /api/training/tasks` - 训练任务列表
 
 ### 消息通知接口
+
 - `GET /api/messages/contacts` - 消息联系人
 - `POST /api/messages/send` - 发送消息
 - `GET /api/messages/unread-count` - 未读消息数
@@ -363,7 +372,7 @@ waitress-serve --port=5000 app:app
 
 详细API文档请参考：[backend/API文档.md](backend/API文档.md)
 
----
+***
 
 ## 技术亮点
 
@@ -378,15 +387,14 @@ waitress-serve --port=5000 app:app
 9. **操作审计**：完整的操作日志记录
 10. **数据可视化**：ECharts图表展示统计数据
 
----
+***
 
 ## 相关文档
 
-- [backend/API文档.md](backend/API文档.md) - 详细API接口文档
 - [AI服务配置说明.md](AI服务配置说明.md) - AI服务配置说明
 - [项目大纲.md](项目大纲.md) - 项目架构说明
 
----
+***
 
 ## 许可说明
 

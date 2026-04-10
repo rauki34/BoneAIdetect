@@ -13,6 +13,7 @@ import torch
 import re
 from collections import defaultdict
 from threading import Lock
+from sqlalchemy import func
 
 # 内存存储验证码: {captcha_id: {'code': 'ABC1', 'expire_time': timestamp}}
 captcha_store = {}
@@ -1000,6 +1001,13 @@ def get_history():
     user = get_current_user()
     # 使用数据隔离过滤函数
     query = get_filtered_reports(user)
+    
+    # 检查是否只请求图片检测记录
+    image_only = request.args.get('image_only', 'false').lower() == 'true'
+    if image_only:
+        # 只返回有原始图片路径的记录（图片检测）
+        query = query.filter(DetectionHistory.original_image.isnot(None))
+    
     history_list = query.order_by(DetectionHistory.timestamp.desc()).limit(50).all()
     data = [item.to_dict() for item in history_list]
     return jsonify({"data": data})
@@ -2427,97 +2435,6 @@ def get_all_datasets():
     
     return jsonify({
         'datasets': [d.to_dict() for d in datasets]
-    })
-
-
-# ==================== 系统监控接口（借鉴pear-admin-flask）====================
-
-@app.route("/api/monitor/system", methods=["GET"])
-@require_role('admin')
-def get_system_info():
-    """获取系统监控信息"""
-    import psutil
-    import platform
-    
-    # CPU信息
-    cpu_percent = psutil.cpu_percent(interval=1)
-    cpu_count = psutil.cpu_count()
-    cpu_freq = psutil.cpu_freq()
-    
-    # 内存信息
-    memory = psutil.virtual_memory()
-    
-    # 磁盘信息
-    disk = psutil.disk_usage('/')
-    
-    # 系统信息
-    boot_time = datetime.fromtimestamp(psutil.boot_time())
-    
-    return jsonify({
-        "cpu": {
-            "percent": cpu_percent,
-            "count": cpu_count,
-            "freq": f"{cpu_freq.current:.0f} MHz" if cpu_freq else "N/A"
-        },
-        "memory": {
-            "total": f"{memory.total / (1024**3):.2f} GB",
-            "available": f"{memory.available / (1024**3):.2f} GB",
-            "percent": memory.percent,
-            "used": f"{memory.used / (1024**3):.2f} GB"
-        },
-        "disk": {
-            "total": f"{disk.total / (1024**3):.2f} GB",
-            "used": f"{disk.used / (1024**3):.2f} GB",
-            "free": f"{disk.free / (1024**3):.2f} GB",
-            "percent": disk.percent
-        },
-        "system": {
-            "platform": platform.platform(),
-            "processor": platform.processor(),
-            "python_version": platform.python_version(),
-            "boot_time": boot_time.strftime("%Y-%m-%d %H:%M:%S")
-        }
-    })
-
-
-@app.route("/api/monitor/stats", methods=["GET"])
-@require_role('admin')
-def get_system_stats():
-    """获取系统统计数据"""
-    # 用户统计
-    user_count = User.query.count()
-    admin_count = User.query.filter_by(role='admin').count()
-    
-    # 检测统计
-    detection_count = DetectionHistory.query.count()
-    today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-    today_detection_count = DetectionHistory.query.filter(DetectionHistory.timestamp >= today).count()
-
-    # 数据集统计
-    from database import Dataset
-    dataset_count = Dataset.query.count()
-
-    # 日志统计
-    log_count = OperationLog.query.count()
-    today_log_count = OperationLog.query.filter(OperationLog.timestamp >= today).count()
-
-    return jsonify({
-        "users": {
-            "total": user_count,
-            "admins": admin_count,
-            "regular": user_count - admin_count
-        },
-        "detections": {
-            "total": detection_count,
-            "today": today_detection_count
-        },
-        "datasets": {
-            "count": dataset_count
-        },
-        "logs": {
-            "total": log_count,
-            "today": today_log_count
-        }
     })
 
 
@@ -4363,297 +4280,6 @@ def patient_get_report_detail(report_id):
     return jsonify({
         "success": True,
         "report": report.to_dict()
-    }), 200
-
-
-# ==================== AI对话助手接口 ====================
-
-def build_ai_prompt(patient, report, conversation_history, user_message):
-    """构建AI提示词
-    
-    Args:
-        patient: 患者用户对象
-        report: 检测报告对象（DetectionHistory）
-        conversation_history: 对话历史列表（最近10轮）
-        user_message: 用户当前消息
-    
-    Returns:
-        str: 构建好的提示词
-    
-    需求: 7.3, 7.5
-    """
-    # 格式化检测结果
-    detections_text = "暂无检测结果"
-    if report.detections:
-        try:
-            import json
-            detections = json.loads(report.detections) if isinstance(report.detections, str) else report.detections
-            if detections:
-                detection_lines = []
-                for i, det in enumerate(detections, 1):
-                    cls = det.get("class", "未知")
-                    conf = det.get("confidence", 0)
-                    detection_lines.append(f"  {i}. 类型: {cls}, 置信度: {conf:.2%}")
-                detections_text = "\n".join(detection_lines)
-        except:
-            detections_text = "检测结果解析失败"
-    
-    # 格式化医疗建议
-    medical_advice_text = report.medical_advice if report.medical_advice else "暂无"
-    
-    # 格式化对话历史
-    history_text = ""
-    if conversation_history:
-        history_lines = []
-        for conv in conversation_history[-10:]:  # 最近10轮
-            role = "患者" if conv.message_type == "user" else "AI助手"
-            history_lines.append(f"{role}: {conv.message_content}")
-        history_text = "\n".join(history_lines)
-    
-    # 构建对话历史部分
-    history_section = f"【对话历史】\n{history_text}\n" if history_text else ""
-    
-    # 构建提示词
-    prompt = f"""你是一位专业的医疗AI助手，正在为患者解答关于骨折检测报告的问题。请用通俗易懂的语言回答，避免使用过于专业的医学术语。
-
-【患者信息】
-姓名: {patient.full_name or patient.username}
-{f'联系方式: {patient.phone}' if patient.phone else ''}
-
-【检测报告】
-检测时间: {report.timestamp.strftime('%Y年%m月%d日 %H:%M') if report.timestamp else '未知'}
-检测结果:
-{detections_text}
-
-医生诊断: {report.diagnosis or '暂无'}
-随访备注: {report.follow_up_notes or '暂无'}
-医疗建议: {medical_advice_text}
-
-{history_section}【患者问题】
-{user_message}
-
-【回答要求】
-1. 用通俗易懂的语言解释，避免专业术语
-2. 如果问题超出报告范围，建议患者咨询医生
-3. 保持友好、耐心的态度
-4. 回答要简洁明了，重点突出
-
-【免责声明】
-请在回答末尾提醒：此为AI辅助解答，仅供参考。具体诊断和治疗方案请咨询专业医生。
-
-请回答患者的问题："""
-    
-    return prompt
-
-
-@app.route("/api/patient/ai/chat", methods=["POST"])
-@require_role('admin', 'patient')
-@rate_limit('ai_chat')
-def patient_ai_chat():
-    """患者与AI助手对话
-    
-    权限: admin, patient
-    
-    请求体:
-        session_id: 会话ID（可选，首次对话时不传，系统会生成）
-        message: 用户消息（必填）
-        report_id: 关联的报告ID（必填）
-    
-    返回:
-        success: 是否成功
-        reply: AI回复
-        session_id: 会话ID
-    
-    需求: 7.2, 7.3, 7.4, 4.3
-    """
-    user = get_current_user()
-    data = request.json or {}
-    
-    session_id = data.get('session_id', '').strip()
-    message = data.get('message', '').strip()
-    report_id = data.get('report_id')
-    
-    # 验证必填字段
-    if not message:
-        return jsonify({"error": "消息内容不能为空"}), 400
-    
-    if not report_id:
-        return jsonify({"error": "report_id 不能为空"}), 400
-    
-    # 检测提示词注入攻击
-    if detect_prompt_injection(message):
-        log_operation(
-            description=f"检测到提示词注入攻击: 用户{user.username}, 消息={message[:100]}",
-            success=False,
-            error_msg="提示词注入攻击"
-        )
-        return jsonify({"error": "检测到不安全的输入内容,请重新输入"}), 400
-    
-    # 清理用户输入
-    message = sanitize_ai_input(message)
-    
-    # 验证报告存在
-    report = DetectionHistory.query.get(report_id)
-    if not report:
-        return jsonify({"error": "报告不存在"}), 404
-    
-    # 验证患者只能访问自己的报告（admin除外）
-    if user.role == 'patient' and report.patient_id != user.id:
-        return jsonify({"error": "无权访问此报告"}), 403
-    
-    # 生成或验证session_id
-    if not session_id:
-        import uuid
-        session_id = str(uuid.uuid4())
-    
-    # 检查会话超时（30分钟无活动）
-    from datetime import timedelta
-    timeout_minutes = 30
-    timeout_threshold = datetime.utcnow() - timedelta(minutes=timeout_minutes)
-    
-    # 查询该会话的最后一条消息
-    last_message = AIConversation.query.filter_by(
-        session_id=session_id
-    ).order_by(AIConversation.created_at.desc()).first()
-    
-    if last_message and last_message.created_at < timeout_threshold:
-        # 会话超时，生成新的session_id
-        import uuid
-        session_id = str(uuid.uuid4())
-    
-    # 查询对话历史（最近10轮）
-    conversation_history = AIConversation.query.filter_by(
-        session_id=session_id,
-        patient_id=user.id
-    ).order_by(AIConversation.created_at.desc()).limit(20).all()
-    conversation_history.reverse()  # 按时间正序
-    
-    # 获取患者信息
-    patient = user if user.role == 'patient' else User.query.get(report.patient_id)
-    if not patient:
-        return jsonify({"error": "患者信息不存在"}), 404
-    
-    # 构建AI提示词
-    prompt = build_ai_prompt(patient, report, conversation_history, message)
-    
-    # 保存用户消息到数据库
-    user_conversation = AIConversation(
-        patient_id=patient.id,
-        session_id=session_id,
-        message_type='user',
-        message_content=message,
-        context_report_id=report_id
-    )
-    db.session.add(user_conversation)
-    db.session.commit()
-    
-    try:
-        # 获取AI配置并调用AI服务
-        ai_config = get_ai_settings()
-        provider = ai_config['provider']
-        
-        # 根据提供商调用不同的AI服务
-        if provider == 'local':
-            # 本地AI服务支持图像，可以传递报告图像
-            image_base64 = None
-            # 如果需要，可以读取报告图像并转换为base64
-            reply = call_local_ai(prompt, image_base64)
-        elif provider == 'openai':
-            reply = call_openai_api(prompt, ai_config['api_key'], ai_config['model'])
-        elif provider == 'custom':
-            reply = call_custom_api(prompt, ai_config['api_url'], ai_config['api_key'], ai_config['model'])
-        elif provider == 'modelscope':
-            # ModelScope支持多模态，可以传递图像
-            image_base64 = None
-            reply = call_modelscope_api(prompt, ai_config['api_key'], ai_config['model'], image_base64)
-        else:
-            return jsonify({"error": "未知的AI服务提供商"}), 400
-        
-        # 过滤AI回复中的敏感信息
-        reply = filter_sensitive_content(reply)
-        
-        # 保存AI回复到数据库
-        ai_conversation = AIConversation(
-            patient_id=patient.id,
-            session_id=session_id,
-            message_type='assistant',
-            message_content=reply,
-            context_report_id=report_id
-        )
-        db.session.add(ai_conversation)
-        db.session.commit()
-        
-        # 记录操作日志
-        log_operation(f"AI对话:session_id={session_id},report_id={report_id}")
-        
-        return jsonify({
-            "success": True,
-            "reply": reply,
-            "session_id": session_id
-        }), 200
-        
-    except requests.exceptions.ConnectionError:
-        return jsonify({
-            "error": "无法连接到AI服务",
-            "hint": "请检查AI服务配置和网络连接"
-        }), 503
-    except requests.exceptions.Timeout:
-        return jsonify({"error": "AI服务响应超时"}), 504
-    except Exception as e:
-        return jsonify({"error": f"AI服务调用失败: {str(e)}"}), 500
-
-
-@app.route("/api/patient/ai/history", methods=["GET"])
-@require_role('admin', 'patient')
-def patient_ai_history():
-    """获取AI对话历史
-    
-    权限: admin, patient
-    
-    Query参数:
-        session_id: 会话ID（可选）
-        report_id: 报告ID（可选）
-    
-    返回最近10轮对话
-    
-    验证:
-        - 患者只能查看自己的对话历史（admin除外）
-    
-    需求: 7.4
-    """
-    user = get_current_user()
-    
-    session_id = request.args.get('session_id', '').strip()
-    report_id = request.args.get('report_id', '').strip()
-    
-    # 构建查询
-    query = AIConversation.query
-    
-    # 患者只能查看自己的对话历史（admin除外）
-    if user.role == 'patient':
-        query = query.filter_by(patient_id=user.id)
-    
-    # 按session_id筛选
-    if session_id:
-        query = query.filter_by(session_id=session_id)
-    
-    # 按report_id筛选
-    if report_id:
-        try:
-            report_id_int = int(report_id)
-            query = query.filter_by(context_report_id=report_id_int)
-        except ValueError:
-            return jsonify({"error": "report_id 必须是整数"}), 400
-    
-    # 获取最近10轮对话（20条消息，因为每轮包含用户和AI两条）
-    conversations = query.order_by(AIConversation.created_at.desc()).limit(20).all()
-    conversations.reverse()  # 按时间正序
-    
-    data = [conv.to_dict() for conv in conversations]
-    
-    return jsonify({
-        "success": True,
-        "data": data
     }), 200
 
 
@@ -6511,6 +6137,485 @@ def get_unread_announcement_count():
     except Exception as e:
         print(f"获取未读公告数失败: {e}")
         return jsonify({"error": "获取失败"}), 500
+
+
+# ==================== AI助手接口 ====================
+
+# AI助手系统提示词
+AI_SYSTEM_PROMPT = """你是一位专业的骨科医疗AI助手，专门为骨折患者提供康复指导和健康咨询。
+
+你的职责：
+1. 解答骨折康复期的常见问题（如饮食、运动、护理等）
+2. 提供骨折愈合过程的一般性知识
+3. 解释医学术语，帮助患者理解诊断报告
+4. 提醒患者按时复查和遵循医嘱
+
+重要限制：
+1. 你提供的信息仅供参考，不能替代专业医生的诊断和治疗建议
+2. 对于紧急医疗情况，必须建议患者立即就医
+3. 不要给出具体的药物剂量或治疗方案
+4. 不要诊断疾病，只能提供一般性健康信息
+5. 如果患者症状严重或异常，建议立即联系主治医生
+
+回答风格：
+- 使用通俗易懂的语言
+- 保持友善、耐心的态度
+- 回答简洁明了，避免过于专业的术语
+- 适当使用表情符号增加亲和力
+- 回答控制在300字以内"""
+
+
+@app.route("/api/ai-assistant/chat", methods=["POST"])
+@require_role('patient', 'doctor', 'admin')
+def ai_assistant_chat():
+    """AI助手对话接口 - 使用系统配置的AI服务"""
+    data = request.get_json()
+    if not data:
+        return jsonify({"success": False, "error": "请求数据为空"}), 400
+    
+    session_id = data.get('session_id', '')
+    message = data.get('message', '').strip()
+    
+    if not session_id:
+        return jsonify({"success": False, "error": "会话ID不能为空"}), 400
+    
+    if not message:
+        return jsonify({"success": False, "error": "消息内容不能为空"}), 400
+    
+    user = get_current_user()
+    
+    try:
+        # 保存用户消息到数据库
+        user_msg = AIConversation(
+            patient_id=user.id,
+            session_id=session_id,
+            message_type='user',
+            message_content=message
+        )
+        db.session.add(user_msg)
+        db.session.commit()
+        
+        # 获取历史对话上下文（最近10条）
+        history = AIConversation.query.filter_by(
+            patient_id=user.id,
+            session_id=session_id
+        ).order_by(AIConversation.created_at.desc()).limit(10).all()
+        
+        # 构建消息历史（使用OpenAI格式）
+        messages = [{"role": "system", "content": AI_SYSTEM_PROMPT}]
+        
+        # 按时间顺序添加历史消息
+        for h in reversed(history):
+            role = "user" if h.message_type == "user" else "assistant"
+            messages.append({"role": role, "content": h.message_content})
+        
+        # 使用系统配置的AI服务
+        reply = call_ai_assistant_api(messages)
+        
+        # 保存AI回复到数据库
+        ai_msg = AIConversation(
+            patient_id=user.id,
+            session_id=session_id,
+            message_type='assistant',
+            message_content=reply
+        )
+        db.session.add(ai_msg)
+        db.session.commit()
+        
+        return jsonify({
+            "success": True,
+            "reply": reply,
+            "session_id": session_id
+        })
+        
+    except Exception as e:
+        db.session.rollback()
+        print(f"AI助手对话失败: {e}")
+        return jsonify({"success": False, "error": "AI服务暂时不可用，请稍后再试"}), 503
+
+
+@app.route("/api/ai-assistant/history", methods=["GET"])
+@require_role('patient', 'doctor', 'admin')
+def ai_assistant_history():
+    """获取AI助手对话历史"""
+    session_id = request.args.get('session_id', '')
+    
+    if not session_id:
+        return jsonify({"success": False, "error": "会话ID不能为空"}), 400
+    
+    user = get_current_user()
+    
+    try:
+        # 获取该会话的所有消息
+        conversations = AIConversation.query.filter_by(
+            patient_id=user.id,
+            session_id=session_id
+        ).order_by(AIConversation.created_at.asc()).all()
+        
+        messages = []
+        for conv in conversations:
+            messages.append({
+                "role": conv.message_type,
+                "content": conv.message_content,
+                "timestamp": conv.created_at.isoformat() if conv.created_at else None
+            })
+        
+        return jsonify({
+            "success": True,
+            "messages": messages,
+            "session_id": session_id
+        })
+        
+    except Exception as e:
+        print(f"获取对话历史失败: {e}")
+        return jsonify({"success": False, "error": "获取历史记录失败"}), 500
+
+
+@app.route("/api/ai-assistant/sessions", methods=["GET"])
+@require_role('patient', 'doctor', 'admin')
+def ai_assistant_sessions():
+    """获取用户的所有会话列表"""
+    user = get_current_user()
+    
+    try:
+        # 获取用户的所有会话（按最后消息时间排序）
+        sessions = db.session.query(
+            AIConversation.session_id,
+            func.max(AIConversation.created_at).label('last_time'),
+            func.count(AIConversation.id).label('message_count')
+        ).filter_by(
+            patient_id=user.id
+        ).group_by(
+            AIConversation.session_id
+        ).order_by(
+            func.max(AIConversation.created_at).desc()
+        ).limit(20).all()
+        
+        result = []
+        for s in sessions:
+            # 获取每条会话的最后一条消息
+            last_msg = AIConversation.query.filter_by(
+                patient_id=user.id,
+                session_id=s.session_id
+            ).order_by(AIConversation.created_at.desc()).first()
+            
+            result.append({
+                "session_id": s.session_id,
+                "last_message": last_msg.message_content if last_msg else "",
+                "last_time": s.last_time.isoformat() if s.last_time else None,
+                "message_count": s.message_count
+            })
+        
+        return jsonify({
+            "success": True,
+            "sessions": result
+        })
+        
+    except Exception as e:
+        print(f"获取会话列表失败: {e}")
+        return jsonify({"success": False, "error": "获取会话列表失败"}), 500
+
+
+def call_ai_assistant_api(messages):
+    """调用系统配置的AI服务
+    
+    复用系统中已有的AI配置和调用方法：
+    - local: 本地AI服务
+    - openai: OpenAI API
+    - custom: 自定义API
+    - modelscope: ModelScope API
+    """
+    try:
+        # 获取系统AI配置
+        ai_config = get_ai_settings()
+        provider = ai_config['provider']
+        api_key = ai_config['api_key']
+        api_url = ai_config['api_url']
+        model = ai_config['model']
+        
+        # 根据提供商调用不同的AI服务
+        if provider == 'local':
+            return call_local_ai_assistant(messages)
+        elif provider == 'openai':
+            return call_openai_assistant(messages, api_key, model)
+        elif provider == 'custom':
+            return call_custom_assistant(messages, api_url, api_key, model)
+        elif provider == 'modelscope':
+            return call_modelscope_assistant(messages, api_key, model)
+        else:
+            # 未知提供商，使用模拟回复
+            print(f"未知的AI服务提供商: {provider}，使用模拟回复")
+            return get_mock_reply(messages)
+            
+    except Exception as e:
+        print(f"AI服务调用失败: {e}")
+        return get_mock_reply(messages)
+
+
+def call_local_ai_assistant(messages):
+    """调用本地AI服务进行对话"""
+    try:
+        # 将messages转换为prompt
+        prompt = ""
+        for msg in messages:
+            role = msg.get('role', 'user')
+            content = msg.get('content', '')
+            if role == 'system':
+                prompt += f"系统指令：{content}\n\n"
+            elif role == 'user':
+                prompt += f"用户：{content}\n"
+            else:
+                prompt += f"助手：{content}\n"
+        
+        prompt += "助手："
+        
+        response = requests.post(
+            f"{AI_SERVICE_URL}/generate",
+            json={"prompt": prompt, "max_length": 500},
+            timeout=30
+        )
+        
+        if response.status_code == 200:
+            result = response.json()
+            return result.get("reply", result.get("result", "AI未能生成有效回复"))
+        else:
+            raise Exception(f"本地AI服务响应失败: {response.text}")
+    except Exception as e:
+        print(f"本地AI服务调用失败: {e}")
+        return get_mock_reply(messages)
+
+
+def call_openai_assistant(messages, api_key, model='gpt-4'):
+    """调用OpenAI API进行对话"""
+    try:
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
+        
+        data = {
+            "model": model,
+            "messages": messages,
+            "temperature": 0.7,
+            "max_tokens": 500
+        }
+        
+        response = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers=headers,
+            json=data,
+            timeout=60
+        )
+        
+        if response.status_code == 200:
+            result = response.json()
+            return result['choices'][0]['message']['content']
+        else:
+            raise Exception(f"OpenAI API调用失败: {response.text}")
+    except Exception as e:
+        print(f"OpenAI API调用失败: {e}")
+        return get_mock_reply(messages)
+
+
+def call_custom_assistant(messages, api_url, api_key, model='gpt-4'):
+    """调用自定义API进行对话"""
+    try:
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
+        
+        data = {
+            "model": model,
+            "messages": messages,
+            "temperature": 0.7,
+            "max_tokens": 500
+        }
+        
+        response = requests.post(
+            api_url,
+            headers=headers,
+            json=data,
+            timeout=60
+        )
+        
+        if response.status_code == 200:
+            result = response.json()
+            # 适配不同API的响应格式
+            if 'choices' in result:
+                return result['choices'][0]['message']['content']
+            elif 'result' in result:
+                return result['result']
+            elif 'reply' in result:
+                return result['reply']
+            else:
+                return str(result)
+        else:
+            raise Exception(f"自定义API调用失败: {response.text}")
+    except Exception as e:
+        print(f"自定义API调用失败: {e}")
+        return get_mock_reply(messages)
+
+
+def call_modelscope_assistant(messages, api_key, model):
+    """调用ModelScope API进行对话"""
+    try:
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
+        
+        data = {
+            "model": model,
+            "messages": messages,
+            "temperature": 0.7,
+            "max_tokens": 500,
+            "stream": False
+        }
+        
+        response = requests.post(
+            "https://api-inference.modelscope.cn/v1/chat/completions",
+            headers=headers,
+            json=data,
+            timeout=60
+        )
+        
+        if response.status_code == 200:
+            result = response.json()
+            if 'choices' in result and len(result['choices']) > 0:
+                return result['choices'][0]['message']['content']
+            else:
+                raise Exception(f"ModelScope API返回格式异常: {result}")
+        else:
+            raise Exception(f"ModelScope API调用失败: {response.status_code} - {response.text}")
+    except Exception as e:
+        print(f"ModelScope API调用失败: {e}")
+        return get_mock_reply(messages)
+
+
+def get_mock_reply(messages):
+    """获取模拟回复（当AI服务不可用时使用）"""
+    # 获取最后一条用户消息
+    user_message = ""
+    for msg in reversed(messages):
+        if msg.get('role') == 'user':
+            user_message = msg.get('content', '')
+            break
+    
+    user_message_lower = user_message.lower()
+    
+    # 根据关键词返回预设回复
+    if any(kw in user_message_lower for kw in ['恢复', '愈合', '多久', '时间']):
+        return """骨折的恢复时间因人而异，主要取决于：
+
+📌 **影响因素**：
+• 骨折类型和严重程度
+• 年龄和身体状况
+• 治疗方式（手术/保守）
+• 康复配合度
+
+⏱️ **一般时间参考**：
+• 简单骨折：6-8周初步愈合
+• 复杂骨折：3-6个月或更长
+• 完全恢复功能：可能需要6-12个月
+
+💡 **建议**：定期复查X光，遵医嘱进行康复训练。如有异常请及时联系您的主治医生！"""
+    
+    elif any(kw in user_message_lower for kw in ['饮食', '吃', '营养', '补钙']):
+        return """骨折康复期的饮食建议：
+
+🥛 **推荐食物**：
+• 高钙食物：牛奶、酸奶、豆腐、深绿色蔬菜
+• 优质蛋白：鸡蛋、鱼肉、瘦肉、豆类
+• 维生素C：柑橘、猕猴桃、西红柿（促进胶原合成）
+• 维生素D：鱼类、蛋黄、适当晒太阳
+
+⚠️ **注意事项**：
+• 避免过量饮酒和吸烟
+• 控制盐分摄入
+• 不要盲目大量补钙，遵医嘱
+
+💊 **提醒**：如需服用钙片或其他营养品，请先咨询医生。"""
+    
+    elif any(kw in user_message_lower for kw in ['运动', '锻炼', '康复', '活动']):
+        return """骨折后的康复运动要循序渐进：
+
+📋 **康复阶段**：
+
+**早期（骨折后1-2周）**：
+• 主要休息，抬高患肢
+• 可做未固定关节的轻微活动
+• 肌肉等长收缩练习
+
+**中期（骨折后2-6周）**：
+• 在医生允许下开始轻度活动
+• 逐步增加关节活动范围
+• 轻度肌肉力量训练
+
+**后期（骨折愈合后）**：
+• 逐步恢复正常活动
+• 加强肌肉力量训练
+• 恢复关节灵活性
+
+⚠️ **重要提醒**：所有康复运动都应在医生指导下进行，切勿自行盲目锻炼！"""
+    
+    elif any(kw in user_message_lower for kw in ['注意', '护理', '照顾', '保养']):
+        return """骨折康复期护理要点：
+
+🏠 **日常护理**：
+• 保持石膏/支具干燥清洁
+• 观察患肢血液循环（颜色、温度）
+• 抬高患肢，减轻肿胀
+• 按医嘱定期换药/复查
+
+🚨 **异常情况需立即就医**：
+• 患肢剧烈疼痛或麻木
+• 手指/脚趾发紫、发凉
+• 石膏内异味或渗液
+• 发热（可能感染）
+
+💊 **用药提醒**：
+• 按时服用医生开的药物
+• 不要自行停药或增减剂量
+• 如有不适及时告知医生
+
+有任何疑问，建议及时联系您的主治医生！"""
+    
+    elif any(kw in user_message_lower for kw in ['疼痛', '疼', '痛', '不舒服']):
+        return """关于骨折后疼痛的管理：
+
+✅ **正常情况**：
+• 骨折后前几天疼痛较明显是正常的
+• 抬高患肢可减轻肿胀和疼痛
+• 按医嘱服用止痛药
+
+⚠️ **需警惕的情况**：
+• 疼痛突然加重
+• 止痛药无法缓解的剧烈疼痛
+• 伴有发热、红肿
+• 石膏/支具过紧导致的疼痛
+
+💡 **缓解方法**：
+• 冰敷（骨折初期，每次15-20分钟）
+• 抬高患肢
+• 保持舒适体位
+• 分散注意力
+
+🚨 **提醒**：如果疼痛持续不缓解或加重，请立即联系医生！"""
+    
+    else:
+        return """感谢您的提问！😊
+
+作为您的AI健康助手，我可以帮您解答：
+• 骨折康复期的饮食建议
+• 康复运动和锻炼指导
+• 日常护理注意事项
+• 骨折愈合的一般知识
+• 诊断报告的解释
+
+⚠️ **重要提醒**：我提供的信息仅供参考，不能替代专业医生的诊断和治疗建议。如有紧急情况或症状加重，请立即联系您的主治医生或前往医院就诊。
+
+您还有什么想了解的吗？"""
 
 
 if __name__ == "__main__":
