@@ -1431,7 +1431,11 @@
                 <el-table :data="recentExaminations" style="width: 100%" border stripe height="300">
                   <el-table-column prop="id" label="ID" width="60" />
                   <el-table-column prop="patient_name" label="患者姓名" />
-                  <el-table-column prop="exam_date" label="检查日期" width="180" />
+                  <el-table-column label="检查日期" width="180">
+                    <template #default="{ row }">
+                      {{ formatLogTime(row.exam_date) }}
+                    </template>
+                  </el-table-column>
                   <el-table-column prop="result" label="结果" width="80">
                     <template #default="{ row }">
                       <el-tag :type="(row.detection_result?.has_fracture) ? 'danger' : 'success'" size="small">
