@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.env
+
+# 大文件/模型
+*.pt
+*.pth
+*.ckpt
+*.bin
+*.safetensors
+
+# 数据和上传
+dataset/
+backend/uploads/
+backend/instance/
+testpackage/
+*.zip
+*.rar
+
+# 训练输出
+backend/runs/
+AI/Qwen3-VL-4B-Instruct/
+
+# IDE
+.claude/
+.trae/
+.kiro/
+.vscode/
+.idea/
+
+# 其他
+无关资料/
+*.jpg
+*.png
+*.mp4
+
+# Node.js
+node_modules/
+dist/

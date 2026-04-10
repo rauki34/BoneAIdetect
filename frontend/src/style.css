@@ -1,0 +1,288 @@
+:root {
+  --font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
+  
+  /* 主色调 - Primary Colors */
+  --primary: #4f6ef7;
+  --primary-light: #7b93f9;
+  --primary-dark: #3350d6;
+  
+  /* 辅助色 - Secondary Colors */
+  --success: #52c41a;
+  --success-light: #73d13d;
+  --warning: #fa8c16;
+  --warning-light: #ffa940;
+  --danger: #f5222d;
+  --danger-light: #ff4d4f;
+  --info: #1890ff;
+  --info-light: #40a9ff;
+  
+  /* 背景色 - Background Colors */
+  --bg-primary: #ffffff;
+  --bg-secondary: #f5f7fa;
+  --bg-tertiary: #e4e7ed;
+  
+  /* 文字颜色 - Text Colors */
+  --text-primary: #303133;
+  --text-regular: #606266;
+  --text-secondary: #909399;
+  --text-placeholder: #c0c4cc;
+  
+  /* 边框颜色 - Border Colors */
+  --border-base: #dcdfe6;
+  --border-light: #e4e7ed;
+  --border-lighter: #ebeef5;
+  
+  /* 阴影 - Shadows */
+  --shadow-sm: 0 2px 4px rgba(0, 0, 0, 0.08);
+  --shadow-base: 0 2px 8px rgba(0, 0, 0, 0.1);
+  --shadow-lg: 0 4px 12px rgba(0, 0, 0, 0.15);
+  
+  /* 圆角 - Border Radius */
+  --radius-sm: 4px;
+  --radius-base: 8px;
+  --radius-lg: 12px;
+  
+  /* 间距 - Spacing */
+  --spacing-xs: 4px;
+  --spacing-sm: 8px;
+  --spacing-md: 12px;
+  --spacing-lg: 16px;
+  --spacing-xl: 20px;
+  --spacing-xxl: 24px;
+  
+  /* 过渡动画 - Transitions */
+  --transition-fast: 0.15s ease;
+  --transition-base: 0.3s ease;
+  --transition-slow: 0.5s ease;
+
+  font-family: var(--font-family);
+  line-height: 1.5;
+
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* 暗色模式变量 - Dark Mode Variables */
+html.dark {
+  --bg-primary: #1e293b;
+  --bg-secondary: #0f172a;
+  --bg-tertiary: #334155;
+  
+  --text-primary: #e2e8f0;
+  --text-regular: #cbd5e1;
+  --text-secondary: #94a3b8;
+  --text-placeholder: #64748b;
+  
+  --border-base: #334155;
+  --border-light: #475569;
+  --border-lighter: #64748b;
+  
+  --shadow-sm: 0 2px 4px rgba(0, 0, 0, 0.3);
+  --shadow-base: 0 2px 8px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 4px 12px rgba(0, 0, 0, 0.5);
+}
+
+a {
+  font-weight: 500;
+  color: var(--primary);
+  text-decoration: none;
+  transition: color var(--transition-fast);
+}
+a:hover { 
+  color: var(--primary-dark); 
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  height: auto;
+  background-color: var(--bg-secondary);
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+}
+
+h1 { font-size: 2.4em; line-height: 1.1; margin:0 0 12px 0 }
+
+button { 
+  font-family: inherit;
+  transition: all var(--transition-fast);
+  cursor: pointer;
+}
+
+button:active {
+  transform: scale(0.98);
+}
+
+#app {
+  width: 100%;
+  min-height: 100vh;
+  height: auto;
+  margin: 0;
+  padding: 0;
+  text-align: left;
+}
+
+/* small helpers */
+.center { display:flex; align-items:center; justify-content:center }
+
+/* 卡片样式 - Card Styles */
+.card-base {
+  background-color: var(--bg-primary);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-base);
+  padding: var(--spacing-xl);
+  transition: box-shadow var(--transition-base);
+}
+
+.card-base:hover {
+  box-shadow: var(--shadow-lg);
+}
+
+/* 按钮反馈 - Button Feedback */
+.btn-feedback {
+  position: relative;
+  overflow: hidden;
+}
+
+.btn-feedback::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 0;
+  height: 0;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.5);
+  transform: translate(-50%, -50%);
+  transition: width 0.6s, height 0.6s;
+}
+
+.btn-feedback:active::after {
+  width: 300px;
+  height: 300px;
+}
+
+/* 加载状态 - Loading States */
+.loading-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(255, 255, 255, 0.8);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+html.dark .loading-overlay {
+  background: rgba(30, 41, 59, 0.8);
+}
+
+/* 响应式工具类 - Responsive Utilities */
+@media (max-width: 768px) {
+  .hide-mobile {
+    display: none !important;
+  }
+}
+
+@media (min-width: 769px) {
+  .show-mobile {
+    display: none !important;
+  }
+}
+
+/* 暗色模式下的表格固定列修复 */
+html.dark .el-table__fixed-right,
+html.dark .el-table__fixed-left {
+  background-color: var(--el-bg-color) !important;
+}
+
+html.dark .el-table__fixed-right .el-table__fixed-header-wrapper,
+html.dark .el-table__fixed-right .el-table__fixed-body-wrapper,
+html.dark .el-table__fixed-left .el-table__fixed-header-wrapper,
+html.dark .el-table__fixed-left .el-table__fixed-body-wrapper {
+  background-color: var(--el-bg-color) !important;
+}
+
+html.dark .el-table__fixed-right th.el-table__cell,
+html.dark .el-table__fixed-right td.el-table__cell,
+html.dark .el-table__fixed-left th.el-table__cell,
+html.dark .el-table__fixed-left td.el-table__cell {
+  background-color: var(--el-bg-color) !important;
+}
+
+/* 响应式导航 - Responsive Navigation */
+@media (max-width: 1024px) {
+  .sidebar {
+    width: 64px !important;
+  }
+  
+  .sidebar-header h2 {
+    display: none;
+  }
+  
+  .header-left h1 {
+    font-size: 16px !important;
+  }
+  
+  .stat-card {
+    flex-direction: column;
+    text-align: center;
+  }
+  
+  .stat-icon {
+    margin-right: 0 !important;
+    margin-bottom: var(--spacing-md);
+  }
+}
+
+@media (max-width: 768px) {
+  .main-content {
+    padding: var(--spacing-md) !important;
+  }
+  
+  .content-section h2 {
+    font-size: 20px !important;
+  }
+  
+  .stat-value {
+    font-size: 24px !important;
+  }
+  
+  .el-col {
+    margin-bottom: var(--spacing-md);
+  }
+}
+
+/* 平滑滚动 - Smooth Scrolling */
+html {
+  scroll-behavior: smooth;
+}
+
+/* 选择文本样式 - Text Selection */
+::selection {
+  background-color: var(--primary-light);
+  color: white;
+}
+
+/* 滚动条样式 - Scrollbar Styles */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bg-secondary);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-base);
+  border-radius: var(--radius-sm);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-secondary);
+}
