@@ -71,8 +71,8 @@ grauateDesign/
 ├── frontend/                 # 前端项目
 │   ├── src/
 │   │   ├── components/      # 公共组件
-│   │   │   ├── AIAssistant.vue           # AI助手组件
-│   │   │   └── PatientSelector.vue       # 患者选择器
+│   │   ├── FloatingAIAssistant.vue   # 悬浮AI助手组件
+│   │   └── PatientSelector.vue       # 患者选择器
 │   │   ├── views/           # 页面视图
 │   │   │   ├── SmartOrthopedicsLogin.vue # 统一登录入口
 │   │   │   ├── PatientPortal.vue         # 患者端门户
@@ -246,7 +246,7 @@ waitress-serve --port=5000 app:app
 - **主治医师**：查看主治医生信息
 - **检查报告**：查看AI检测报告
 - **消息通知**：接收医生消息和系统公告
-- **AI咨询**：与AI助手对话咨询
+- **AI健康助手**：悬浮按钮式AI助手，支持骨折康复咨询和常见问题解答
 
 ### 3. 医生工作站
 
