@@ -3970,7 +3970,17 @@ const handleDatasetPageChange = (page) => {
 .admin-container { height: calc(100vh - 64px); }
 .admin-sidebar { background: white; border-right: 1px solid #e4e7ed; }
 .admin-menu { border-right: none; padding: 20px 0; }
-.menu-badge { margin-left: 8px; }
+.menu-badge {
+  margin-left: 4px;
+  display: inline-flex;
+  vertical-align: middle;
+}
+.menu-badge :deep(.el-badge__content) {
+  position: relative;
+  top: -6px;
+  right: 0;
+  transform: none;
+}
 .admin-main { padding: 30px; overflow-y: auto; }
 .page-title { margin-bottom: 24px; color: #1e293b; font-size: 24px; font-weight: 600; }
 .form-unit { margin-left: 8px; color: #64748b; }
