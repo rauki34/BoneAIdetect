@@ -1454,7 +1454,7 @@
           <h2 class="page-title">公告管理</h2>
           <el-card shadow="never">
             <div style="margin-bottom: 20px;">
-              <el-button type="primary" @click="showAnnouncementDialog = true">
+              <el-button type="primary" @click="openCreateAnnouncement">
                 <el-icon><Plus /></el-icon> 发布公告
               </el-button>
             </div>
@@ -3777,6 +3777,18 @@ const getPriorityType = (priority) => {
 const viewAnnouncement = (row) => {
   viewingAnnouncement.value = row
   showViewDialog.value = true
+}
+
+const openCreateAnnouncement = () => {
+  editingAnnouncement.value = null
+  announcementForm.value = {
+    title: '',
+    content: '',
+    target_role: 'all',
+    priority: 'normal',
+    is_active: true
+  }
+  showAnnouncementDialog.value = true
 }
 
 const editAnnouncement = (row) => {
