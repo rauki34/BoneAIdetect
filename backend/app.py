@@ -1017,7 +1017,7 @@ def get_history():
 @require_auth
 def delete_history(history_id):
     user = get_current_user()
-    history = DetectionHistory.query.get(history_id)
+    history = db.session.get(DetectionHistory, history_id)
     if not history:
         return jsonify({"error": "记录不存在"}), 404
     
@@ -1060,7 +1060,7 @@ def clear_history():
 def save_medical_advice(history_id):
     """保存医疗建议到历史记录"""
     user = get_current_user()
-    history = DetectionHistory.query.get(history_id)
+    history = db.session.get(DetectionHistory, history_id)
     
     if not history:
         return jsonify({"error": "记录不存在"}), 404
@@ -1120,7 +1120,7 @@ def save_medical_advice(history_id):
 def get_history_detail(history_id):
     """获取单条历史记录详情"""
     user = get_current_user()
-    history = DetectionHistory.query.get(history_id)
+    history = db.session.get(DetectionHistory, history_id)
     
     if not history:
         return jsonify({"error": "记录不存在"}), 404
@@ -1505,7 +1505,7 @@ def create_user():
 @require_role('admin')
 def delete_user(user_id):
     """删除用户"""
-    user = User.query.get(user_id)
+    user = db.session.get(User, user_id)
     if not user:
         return jsonify({"error": "用户不存在"}), 404
     
@@ -1541,7 +1541,7 @@ def update_user(user_id):
         email: 邮箱 (可选)
         phone: 电话 (可选)
     """
-    user = User.query.get(user_id)
+    user = db.session.get(User, user_id)
     if not user:
         return jsonify({"error": "用户不存在"}), 404
     
@@ -1713,7 +1713,7 @@ def generate_ai_advice_async(history_id, detections):
             
             # 保存到数据库
             with app.app_context():
-                history = DetectionHistory.query.get(history_id)
+                history = db.session.get(DetectionHistory, history_id)
                 if history:
                     history.medical_advice = json.dumps(medical_advice, ensure_ascii=False)
                     db.session.commit()
@@ -2206,7 +2206,7 @@ def get_logs():
 @require_role('admin')
 def delete_log(log_id):
     """删除单条日志"""
-    log = OperationLog.query.get(log_id)
+    log = db.session.get(OperationLog, log_id)
     if not log:
         return jsonify({"error": "日志不存在"}), 404
     
@@ -2369,7 +2369,7 @@ def upload_dataset():
 def update_dataset(dataset_id):
     """更新数据集信息"""
     from database import Dataset
-    dataset = Dataset.query.get(dataset_id)
+    dataset = db.session.get(Dataset, dataset_id)
     if not dataset:
         return jsonify({"error": "数据集不存在"}), 404
     
@@ -2394,7 +2394,7 @@ def update_dataset(dataset_id):
 def delete_dataset(dataset_id):
     """删除数据集"""
     from database import Dataset
-    dataset = Dataset.query.get(dataset_id)
+    dataset = db.session.get(Dataset, dataset_id)
     if not dataset:
         return jsonify({"error": "数据集不存在"}), 404
     
@@ -2966,14 +2966,21 @@ def get_published_models():
 @require_role('admin', 'doctor')
 def train_model():
     """上传数据集并开始训练模型"""
-    model_name = request.form.get('name', '').strip()
-    description = request.form.get('description', '')
-    base_model = request.form.get('base_model', 'yolov8')
-    epochs = int(request.form.get('epochs', 100))
-    batch_size = int(request.form.get('batch_size', 16))
-    img_size = int(request.form.get('img_size', 640))
-    dataset_source = request.form.get('dataset_source', 'upload')  # 'upload' 或 'existing'
-    use_best_hyperparams = request.form.get('use_best_hyperparams', 'false').lower() == 'true'  # 是否使用最佳超参数
+    try:
+        model_name = request.form.get('name', '').strip()
+        description = request.form.get('description', '')
+        base_model = request.form.get('base_model', 'yolov8')
+        epochs = int(request.form.get('epochs', 100))
+        batch_size = int(request.form.get('batch_size', 16))
+        img_size = int(request.form.get('img_size', 640))
+        dataset_source = request.form.get('dataset_source', 'upload')
+        use_best_hyperparams = request.form.get('use_best_hyperparams', 'false').lower() == 'true'
+        
+        print(f"[DEBUG] 训练请求参数: name={model_name}, base_model={base_model}, dataset_source={dataset_source}")
+        print(f"[DEBUG] Form data: {dict(request.form)}")
+        print(f"[DEBUG] Files: {list(request.files.keys())}")
+    except Exception as e:
+        return jsonify({"error": f"参数解析错误: {str(e)}"}), 400
 
     username = request.headers.get('X-Username') or 'anonymous'
 
@@ -2989,7 +2996,7 @@ def train_model():
             return jsonify({"error": "未选择数据集"}), 400
 
         from database import Dataset
-        dataset = Dataset.query.get(int(dataset_id))
+        dataset = db.session.get(Dataset, int(dataset_id))
         if not dataset:
             return jsonify({"error": "数据集不存在"}), 404
 
@@ -3730,7 +3737,7 @@ def get_training_tasks():
 @require_auth
 def get_training_task(task_id):
     """获取训练任务详情"""
-    task = TrainingTask.query.get(task_id)
+    task = db.session.get(TrainingTask, task_id)
     if not task:
         return jsonify({"error": "任务不存在"}), 404
     
@@ -3741,7 +3748,7 @@ def get_training_task(task_id):
 @require_auth
 def get_training_logs(task_id):
     """获取训练日志"""
-    task = TrainingTask.query.get(task_id)
+    task = db.session.get(TrainingTask, task_id)
     if not task or not task.log_file:
         return jsonify({"logs": ""})
 
@@ -3827,7 +3834,7 @@ def patients():
 @require_auth
 def patient_detail(patient_id):
     """患者详情"""
-    patient = Patient.query.get(patient_id)
+    patient = db.session.get(Patient, patient_id)
     if not patient:
         return jsonify({"success": False, "message": "患者不存在"})
     
@@ -3895,7 +3902,7 @@ def examinations():
         user = get_current_user()
         
         # 检查患者是否存在
-        patient = Patient.query.get(data.get('patient_id'))
+        patient = db.session.get(Patient, data.get('patient_id'))
         if not patient:
             return jsonify({"success": False, "message": "患者不存在"})
         
@@ -3922,7 +3929,7 @@ def examinations():
 @require_auth
 def examination_detail(exam_id):
     """检查记录详情"""
-    examination = Examination.query.get(exam_id)
+    examination = db.session.get(Examination, exam_id)
     if not examination:
         return jsonify({"success": False, "message": "检查记录不存在"})
     
@@ -4042,12 +4049,12 @@ def doctor_create_report():
         return jsonify({"error": "detection_id 不能为空"}), 400
 
     # 验证 detection_id 对应的记录存在
-    history = DetectionHistory.query.get(detection_id)
+    history = db.session.get(DetectionHistory, detection_id)
     if not history:
         return jsonify({"error": "检测记录不存在"}), 404
 
     # 验证 patient_id 对应的用户存在且 role='patient'
-    patient = User.query.get(patient_id)
+    patient = db.session.get(User, patient_id)
     if not patient:
         return jsonify({"error": "患者不存在"}), 404
     if patient.role != 'patient':
@@ -4136,7 +4143,7 @@ def doctor_get_reports():
         report_dict = report.to_dict()
         # 确保包含患者姓名（通过patient_id关联User获取full_name）
         if report.patient_id and not report_dict.get('patient_name'):
-            patient = User.query.get(report.patient_id)
+            patient = db.session.get(User, report.patient_id)
             if patient:
                 report_dict['patient_name'] = patient.full_name or patient.username
         data.append(report_dict)
@@ -4169,7 +4176,7 @@ def doctor_update_report(report_id):
     data = request.json or {}
     
     # 查找报告
-    report = DetectionHistory.query.get(report_id)
+    report = db.session.get(DetectionHistory, report_id)
     if not report:
         return jsonify({"error": "报告不存在"}), 404
     
@@ -4268,7 +4275,7 @@ def patient_get_report_detail(report_id):
     user = get_current_user()
     
     # 查找报告
-    report = DetectionHistory.query.get(report_id)
+    report = db.session.get(DetectionHistory, report_id)
     if not report:
         return jsonify({"error": "报告不存在"}), 404
     
@@ -4509,7 +4516,7 @@ def get_patient_doctors():
     
     doctors = []
     for relation in relations:
-        doctor = User.query.get(relation.doctor_id)
+        doctor = db.session.get(User, relation.doctor_id)
         profile = DoctorProfile.query.filter_by(user_id=doctor.id).first()
         if doctor and profile:
             doctors.append({
@@ -4594,7 +4601,7 @@ def get_patient_messages():
     
     messages_data = []
     for msg in messages:
-        sender = User.query.get(msg.sender_id) if msg.sender_id else None
+        sender = db.session.get(User, msg.sender_id) if msg.sender_id else None
         messages_data.append({
             "id": msg.id,
             "title": msg.title,
@@ -4746,7 +4753,7 @@ def get_doctor_dashboard():
     ).all() if patient_ids_for_detect else []
     
     for det in recent_detections[:3]:  # 最多显示3个
-        patient = User.query.get(det.patient_id)
+        patient = db.session.get(User, det.patient_id)
         if patient:
             tasks.append({
                 "id": f"det_{det.id}",
@@ -4762,7 +4769,7 @@ def get_doctor_dashboard():
     ).order_by(MedicalRecord.follow_up_date.desc()).limit(2).all()
     
     for rec in follow_up_patients:
-        patient = User.query.get(rec.patient_id)
+        patient = db.session.get(User, rec.patient_id)
         if patient:
             tasks.append({
                 "id": f"follow_{rec.id}",
@@ -5099,7 +5106,7 @@ def approve_doctor_registration(registration_id):
     status = data.get('status')  # 'approved' or 'rejected'
     note = data.get('note', '')
     
-    registration = DoctorRegistration.query.get(registration_id)
+    registration = db.session.get(DoctorRegistration, registration_id)
     if not registration:
         return jsonify({"error": "申请不存在"}), 404
     
@@ -5531,7 +5538,7 @@ def admin_update_user(user_id):
     admin = get_current_user()
     data = request.json
     
-    user = User.query.get(user_id)
+    user = db.session.get(User, user_id)
     if not user:
         return jsonify({"error": "用户不存在"}), 404
     
@@ -5700,7 +5707,7 @@ def send_message():
         return jsonify({"error": "消息内容不能为空"}), 400
     
     # 验证接收人是否存在
-    receiver = User.query.get(receiver_id)
+    receiver = db.session.get(User, receiver_id)
     if not receiver:
         return jsonify({"error": "接收人不存在"}), 404
     
@@ -5756,7 +5763,7 @@ def get_conversation(other_user_id):
     user = get_current_user()
     
     # 验证对方用户是否存在
-    other_user = User.query.get(other_user_id)
+    other_user = db.session.get(User, other_user_id)
     if not other_user:
         return jsonify({"error": "用户不存在"}), 404
     
@@ -5768,7 +5775,7 @@ def get_conversation(other_user_id):
     
     messages_data = []
     for msg in messages:
-        sender = User.query.get(msg.sender_id) if msg.sender_id else None
+        sender = db.session.get(User, msg.sender_id) if msg.sender_id else None
         messages_data.append({
             "id": msg.id,
             "content": msg.content,
@@ -5807,7 +5814,7 @@ def get_message_contacts():
         ).all()
         
         for relation in relations:
-            doctor = User.query.get(relation.doctor_id)
+            doctor = db.session.get(User, relation.doctor_id)
             if doctor:
                 profile = DoctorProfile.query.filter_by(user_id=doctor.id).first()
                 # 获取未读消息数
@@ -5843,7 +5850,7 @@ def get_message_contacts():
         ).all()
         
         for relation in relations:
-            patient = User.query.get(relation.patient_id)
+            patient = db.session.get(User, relation.patient_id)
             if patient:
                 profile = PatientProfile.query.filter_by(user_id=patient.id).first()
                 # 获取未读消息数
@@ -5977,7 +5984,7 @@ def update_announcement(announcement_id):
     if user.role != 'admin':
         return jsonify({"error": "无权访问"}), 403
 
-    announcement = Announcement.query.get(announcement_id)
+    announcement = db.session.get(Announcement, announcement_id)
     if not announcement:
         return jsonify({"error": "公告不存在"}), 404
 
@@ -6016,7 +6023,7 @@ def delete_announcement(announcement_id):
     if user.role != 'admin':
         return jsonify({"error": "无权访问"}), 403
 
-    announcement = Announcement.query.get(announcement_id)
+    announcement = db.session.get(Announcement, announcement_id)
     if not announcement:
         return jsonify({"error": "公告不存在"}), 404
 

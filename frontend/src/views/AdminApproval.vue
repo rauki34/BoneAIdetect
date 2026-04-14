@@ -849,7 +849,7 @@
                           v-for="model in availableCustomModels" 
                           :key="model.id" 
                           :label="model.name" 
-                          :value="model.id"
+                          :value="model.model_key"
                         />
                       </el-option-group>
                     </el-select>
@@ -2759,7 +2759,7 @@ const startTraining = async () => {
     formData.append('use_best_hyperparams', trainingForm.use_best_hyperparams.toString())
 
     if (datasetSource.value === 'existing') {
-      formData.append('dataset_id', trainingForm.dataset_id)
+      formData.append('dataset_id', String(trainingForm.dataset_id))
     } else {
       formData.append('dataset', trainingForm.dataset)
     }
@@ -2774,7 +2774,10 @@ const startTraining = async () => {
       loadTrainingTasks()
     }
   } catch (err) {
-    ElMessage.error('启动训练失败: ' + (err.response?.data?.error || err.message))
+    console.error('训练启动失败:', err)
+    console.error('错误响应:', err.response?.data)
+    const errorMsg = err.response?.data?.error || err.response?.data?.message || err.message || '未知错误'
+    ElMessage.error('启动训练失败: ' + errorMsg)
   } finally {
     isTraining.value = false
   }
