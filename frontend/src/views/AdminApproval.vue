@@ -471,6 +471,9 @@
               <el-form-item label="置信度阈值">
                 <el-input-number v-model="aiSettings.confidence_threshold" :min="0" :max="1" :step="0.01" />
               </el-form-item>
+              <el-form-item>
+                <el-button type="primary" @click="saveModelSettings">保存模型设置</el-button>
+              </el-form-item>
             </el-form>
           </el-card>
 
@@ -2539,6 +2542,24 @@ const onProviderChange = async () => {
   aiSettings.ai_api_key = ''
   aiSettings.ai_api_url = ''
   await loadUserAIModels()
+}
+
+const saveModelSettings = async () => {
+  try {
+    const response = await axios.post('/api/settings', {
+      default_model: aiSettings.default_model,
+      confidence_threshold: aiSettings.confidence_threshold
+    })
+    if (response.data.success) {
+      ElMessage.success('模型设置已保存')
+    } else {
+      ElMessage.warning(response.data.message || '保存可能未成功')
+    }
+  } catch (err) {
+    console.error('保存模型设置失败', err)
+    const errorMsg = err.response?.data?.error || err.message || '未知错误'
+    ElMessage.error(`保存失败：${errorMsg}`)
+  }
 }
 
 const saveAISettings = async () => {

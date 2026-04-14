@@ -3213,7 +3213,7 @@ def train_model_task(task_id, model_id, base_model_path, dataset_dir, epochs, ba
             print(f"使用最佳超参数: {use_best_hyperparams}")
             print(f"{'='*80}\n")
 
-            # 准备训练参数 - 优化版本
+            # 1. 动态准备核心参数
             train_args = {
                 'data': data_yaml,
                 'epochs': epochs,
@@ -3222,97 +3222,29 @@ def train_model_task(task_id, model_id, base_model_path, dataset_dir, epochs, ba
                 'project': os.path.join(UPLOADS, 'training_runs'),
                 'name': custom_model.model_key,
                 'exist_ok': True,
-                'verbose': False,  # 关闭详细输出，减少IO
                 'pretrained': True,
-                'amp': True,  
-                'workers': 4,  # 使用多进程数据加载
-                'cache': 'disk',  # 磁盘缓存，加快数据加载
-                'patience': min(50, epochs // 3),  # 动态早停
-                'save': True,
-                'save_period': -1,  # 只保存最佳模型
+                'amp': True,
                 'device': 0 if torch.cuda.is_available() else 'cpu',
-                'optimizer': 'SGD',  
-                'lr0': 0.001,
-                'lrf': 0.01,
-                'momentum': 0.937,
-                'weight_decay': 0.0005,
-                'warmup_epochs': 3,  # 减少预热轮数
-                'warmup_momentum': 0.8,
-                'box': 7.5,
-                'cls': 0.5,
-                'dfl': 1.5,
-                'hsv_h': 0.015,
-                'hsv_s': 0.7,
-                'hsv_v': 0.4,
-                'degrees': 5.0,
-                'translate': 0.1,
-                'scale': 0.5,
-                'shear': 2.0,
-                'perspective': 0.0,
-                'flipud': 0.0,
-                'fliplr': 0.5,
-                'mosaic': 1.0,
-                'mixup': 0.0,
-                'copy_paste': 0.0,
-                'auto_augment': 'randaugment',
-                'erasing': 0.4,
-                'crop_fraction': 1.0,
-                'deterministic': False,  # 禁用确定性，提升速度
-                'single_cls': False,
-                'rect': False,
-                'cos_lr': True,  # 余弦学习率调度
-                'close_mosaic': 10,  # 最后10轮关闭mosaic
-                'resume': False,
-                'fraction': 1.0,
-                'profile': False,
-                'freeze': None,
-                'overlap_mask': True,
-                'mask_ratio': 4,
-                'dropout': 0.0,
-                'val': True,
-                'split': 'val',
+                'verbose': False,
+                'plots': True,
+                'save': True,
+                # 提升定位精度的参数
+                'box': 10.0,        # 增加定位损失权重（默认7.5）
+                'dfl': 2.0,         # 增加分布焦点损失（默认1.5）
+                'iou': 0.25,        # 降低IoU阈值，让模型更关注精确定位
             }
-            
-            # 加载最佳超参数（如果需要）
+
+            # 2. 优化超参数加载逻辑 (使用 update 批量覆盖)
             if use_best_hyperparams:
-                best_hyperparams_path = os.path.join(BASE_DIR, 'runs', 'best_hyperparams.json')
-                if os.path.exists(best_hyperparams_path):
+                best_hp_path = os.path.join(BASE_DIR, 'runs', 'best_hyperparams.json')
+                if os.path.exists(best_hp_path):
                     try:
-                        import json
-                        with open(best_hyperparams_path, 'r', encoding='utf-8') as f:
-                            best_hyperparams = json.load(f)
-                        
-                        # 应用最佳超参数
-                        if 'optimizer' in best_hyperparams:
-                            train_args['optimizer'] = best_hyperparams['optimizer']
-                        if 'lr0' in best_hyperparams:
-                            train_args['lr0'] = best_hyperparams['lr0']
-                        if 'lrf' in best_hyperparams:
-                            train_args['lrf'] = best_hyperparams['lrf']
-                        if 'momentum' in best_hyperparams:
-                            train_args['momentum'] = best_hyperparams['momentum']
-                        if 'weight_decay' in best_hyperparams:
-                            train_args['weight_decay'] = best_hyperparams['weight_decay']
-                        if 'warmup_epochs' in best_hyperparams:
-                            train_args['warmup_epochs'] = best_hyperparams['warmup_epochs']
-                        if 'batch' in best_hyperparams:
-                            train_args['batch'] = best_hyperparams['batch']
-                        if 'patience' in best_hyperparams:
-                            train_args['patience'] = best_hyperparams['patience']
-                        if 'mixup' in best_hyperparams:
-                            train_args['mixup'] = best_hyperparams['mixup']
-                        if 'degrees' in best_hyperparams:
-                            train_args['degrees'] = best_hyperparams['degrees']
-                        if 'scale' in best_hyperparams:
-                            train_args['scale'] = best_hyperparams['scale']
-                        if 'cos_lr' in best_hyperparams:
-                            train_args['cos_lr'] = best_hyperparams['cos_lr']
-                        
-                        print(f"✓ 已加载最佳超参数: {best_hyperparams}")
+                        with open(best_hp_path, 'r') as f:
+                            best_hp = json.load(f)
+                        train_args.update(best_hp)  # 批量覆盖比 if 判断更简洁
+                        print(f"✓ 成功合并最佳超参数")
                     except Exception as e:
-                        print(f"⚠️ 加载最佳超参数失败: {e}，使用默认参数")
-                else:
-                    print(f"⚠️ 最佳超参数文件不存在: {best_hyperparams_path}，使用默认参数")
+                        print(f"⚠️ 超参数解析失败: {e}")
             
             # 创建训练回调类来更新进度和检查停止标志 - 优化版本
             class TrainingCallback:
@@ -3394,107 +3326,42 @@ def train_model_task(task_id, model_id, base_model_path, dataset_dir, epochs, ba
                 # 更新模型状态
                 custom_model.status = 'trained'
                 
-                # 从训练结果中提取性能指标
-                # results 是 DetMetrics 对象，results_dict 包含:
-                # - metrics/precision(B)
-                # - metrics/recall(B)
-                # - metrics/mAP50(B)
-                # - metrics/mAP50-95(B)
-                # - fitness
-                if hasattr(results, 'results_dict') and results.results_dict:
-                    results_dict = results.results_dict
-                    print(f"训练结果字典: {results_dict}")  # 调试输出
-                    
-                    # 尝试多种可能的键名格式
-                    map50_keys = ['metrics/mAP50(B)', 'metrics/mAP50', 'mAP50']
-                    map50_95_keys = ['metrics/mAP50-95(B)', 'metrics/mAP50-95', 'mAP50-95', 'metrics/mAP50:0.95']
-                    precision_keys = ['metrics/precision(B)', 'metrics/precision', 'precision']
-                    recall_keys = ['metrics/recall(B)', 'metrics/recall', 'recall']
-                    
-                    custom_model.map50 = 0
-                    for key in map50_keys:
-                        if key in results_dict:
-                            custom_model.map50 = float(results_dict[key])
-                            break
-                    
-                    custom_model.map50_95 = 0
-                    for key in map50_95_keys:
-                        if key in results_dict:
-                            custom_model.map50_95 = float(results_dict[key])
-                            break
-                    
-                    # 提取 Precision
-                    custom_model.precision = 0
-                    for key in precision_keys:
-                        if key in results_dict:
-                            custom_model.precision = float(results_dict[key])
-                            break
-                    
-                    # 提取 Recall
-                    custom_model.recall = 0
-                    for key in recall_keys:
-                        if key in results_dict:
-                            custom_model.recall = float(results_dict[key])
-                            break
-                    
-                    # 计算 F1-Score (Precision 和 Recall 的调和平均)
-                    if custom_model.precision > 0 and custom_model.recall > 0:
-                        custom_model.f1_score = 2 * (custom_model.precision * custom_model.recall) / (custom_model.precision + custom_model.recall)
-                    else:
-                        custom_model.f1_score = 0
-                    
-                    # 综合评分 = (mAP50 + mAP50-95 + F1) / 3，更全面地反映模型性能
-                    scores = [custom_model.map50, custom_model.map50_95, custom_model.f1_score]
-                    valid_scores = [s for s in scores if s > 0]
-                    if valid_scores:
-                        custom_model.accuracy = sum(valid_scores) / len(valid_scores)
-                    else:
-                        custom_model.accuracy = 0
-                    
-                    print(f"✓ 训练指标 - mAP50: {custom_model.map50:.4f}, mAP50-95: {custom_model.map50_95:.4f}")
-                    print(f"✓ 检测指标 - Precision: {custom_model.precision:.4f}, Recall: {custom_model.recall:.4f}, F1: {custom_model.f1_score:.4f}")
-                    print(f"✓ 综合评分: {custom_model.accuracy:.4f}")
-                else:
-                    # 如果 results_dict 不可用，尝试从其他属性获取
-                    print(f"警告: 无法获取训练指标，results 类型: {type(results)}")
-                    # 尝试从 results 对象直接获取属性
-                    try:
-                        if hasattr(results, 'box'):
+                # 3. 增强指标提取逻辑 (增加对不同版本返回值的兼容)
+                def extract_metrics(results, model_obj):
+                    # 优先尝试 results.results_dict (v8/v11 常用)
+                    rd = getattr(results, 'results_dict', {})
+                    # 定义映射关系：模型字段 -> 可能的键名列表
+                    mapping = {
+                        'map50': ['metrics/mAP50(B)', 'mAP50'],
+                        'map50_95': ['metrics/mAP50-95(B)', 'metrics/mAP50:0.95', 'mAP50-95'],
+                        'precision': ['metrics/precision(B)', 'precision'],
+                        'recall': ['metrics/recall(B)', 'recall']
+                    }
+                    for field, keys in mapping.items():
+                        val = 0
+                        for k in keys:
+                            if k in rd:
+                                val = rd[k]
+                                break
+                        # 如果 dict 没找到，尝试从属性对象获取 (results.box)
+                        if val == 0 and hasattr(results, 'box'):
                             box = results.box
-                            custom_model.map50 = float(box.map50) if hasattr(box, 'map50') else 0
-                            custom_model.map50_95 = float(box.map) if hasattr(box, 'map') else 0
-                            custom_model.precision = float(box.mp) if hasattr(box, 'mp') else 0
-                            custom_model.recall = float(box.mr) if hasattr(box, 'mr') else 0
-                            
-                            # 计算 F1
-                            if custom_model.precision > 0 and custom_model.recall > 0:
-                                custom_model.f1_score = 2 * (custom_model.precision * custom_model.recall) / (custom_model.precision + custom_model.recall)
-                            else:
-                                custom_model.f1_score = 0
-                            
-                            # 综合评分
-                            scores = [custom_model.map50, custom_model.map50_95, custom_model.f1_score]
-                            valid_scores = [s for s in scores if s > 0]
-                            custom_model.accuracy = sum(valid_scores) / len(valid_scores) if valid_scores else 0
-                            
-                            print(f"✓ 从 results.box 获取指标 - mAP50: {custom_model.map50:.4f}, mAP50-95: {custom_model.map50_95:.4f}")
-                            print(f"✓ Precision: {custom_model.precision:.4f}, Recall: {custom_model.recall:.4f}, F1: {custom_model.f1_score:.4f}")
-                        else:
-                            custom_model.map50 = 0
-                            custom_model.map50_95 = 0
-                            custom_model.precision = 0
-                            custom_model.recall = 0
-                            custom_model.f1_score = 0
-                            custom_model.accuracy = 0
-                    except Exception as e:
-                        print(f"从 results 获取指标失败: {e}")
-                        custom_model.map50 = 0
-                        custom_model.map50_95 = 0
-                        custom_model.precision = 0
-                        custom_model.recall = 0
-                        custom_model.f1_score = 0
-                        custom_model.accuracy = 0
-                
+                            attr_map = {'map50': 'map50', 'map50_95': 'map', 'precision': 'mp', 'recall': 'mr'}
+                            val = getattr(box, attr_map[field], 0)
+                        setattr(model_obj, field, float(val))
+                    # 计算 F1 和 Accuracy
+                    if model_obj.precision + model_obj.recall > 0:
+                        model_obj.f1_score = 2 * (model_obj.precision * model_obj.recall) / (model_obj.precision + model_obj.recall)
+                    else:
+                        model_obj.f1_score = 0
+                    # 骨折检测通常更看重 mAP50 和 Recall (防止漏检)
+                    model_obj.accuracy = (model_obj.map50 * 0.4 + model_obj.map50_95 * 0.3 + model_obj.f1_score * 0.3)
+
+                extract_metrics(results, custom_model)
+                print(f"✓ 训练指标 - mAP50: {custom_model.map50:.4f}, mAP50-95: {custom_model.map50_95:.4f}")
+                print(f"✓ 检测指标 - Precision: {custom_model.precision:.4f}, Recall: {custom_model.recall:.4f}, F1: {custom_model.f1_score:.4f}")
+                print(f"✓ 综合评分: {custom_model.accuracy:.4f}")
+
                 # 加载新模型到内存
                 models[custom_model.model_key] = YOLO(custom_model.model_path)
             else:
