@@ -843,10 +843,14 @@
                 </el-col>
                 <el-col :span="12">
                   <el-form-item label="基础模型" required>
-                    <el-select v-model="trainingForm.base_model" style="width: 100%" placeholder="选择基础模型">
-                      <el-option label="YOLOv8" value="yolov8" />
-                      <el-option label="YOLO11" value="yolo11" />
-                      <el-option label="YOLOv5" value="yolo26" />
+                    <el-select v-model="trainingForm.base_model" style="width: 100%" placeholder="请选择模型">
+                      <el-option label="YOLOv8n" value="yolov8n" />
+                      <el-option label="YOLOv8s" value="yolov8s" />
+                      <el-option label="YOLOv8m" value="yolov8m" />
+                      <el-option label="YOLO11n" value="yolo11n" />
+                      <el-option label="YOLO11s" value="yolo11s" />
+                      <el-option label="YOLO11m" value="yolo11m" />
+                      <el-option label="YOLO26n" value="yolo26n" />
                       <el-option-group label="自定义模型（续训）" v-if="availableCustomModels.length > 0">
                         <el-option 
                           v-for="model in availableCustomModels" 
@@ -2075,7 +2079,7 @@ const modelsLoading = ref(false)
 const trainingForm = reactive({
   name: '',
   description: '',
-  base_model: 'yolov8',
+  base_model: '',
   epochs: 100,
   batch_size: 16,
   img_size: 640,

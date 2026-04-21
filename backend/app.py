@@ -63,16 +63,24 @@ os.makedirs(RESULTS, exist_ok=True)
 os.makedirs(MODELS_DIR, exist_ok=True)
 # 模型文件映射: 模型键 -> 模型文件路径
 MODEL_CANDIDATES = {
-    "yolov8": os.path.join(BASE_DIR, "models", "yolov8n.pt"),
-    "yolo26": os.path.join(BASE_DIR, "models", "yolo26n.pt"),
-    "yolo11": os.path.join(BASE_DIR, "models", "yolo11n.pt"),
+    "yolov8n": os.path.join(BASE_DIR, "models", "yolov8n.pt"),
+    "yolov8s": os.path.join(BASE_DIR, "models", "yolov8s.pt"),
+    "yolov8m": os.path.join(BASE_DIR, "models", "yolov8m.pt"),
+    "yolo11n": os.path.join(BASE_DIR, "models", "yolo11n.pt"),
+    "yolo11s": os.path.join(BASE_DIR, "models", "yolo11s.pt"),
+    "yolo11m": os.path.join(BASE_DIR, "models", "yolo11m.pt"),
+    "yolo26n": os.path.join(BASE_DIR, "models", "yolo26n.pt"),
 }
 
 # 基础模型到实际模型文件名的映射（用于训练时加载）
 BASE_MODEL_MAP = {
-    "yolov8": "yolov8n",
-    "yolo11": "yolo11n",
-    "yolo26": "yolo26n",
+    "yolov8n": "yolov8n",
+    "yolov8s": "yolov8s",
+    "yolov8m": "yolov8m",
+    "yolo11n": "yolo11n",
+    "yolo11s": "yolo11s",
+    "yolo11m": "yolo11m",
+    "yolo26n": "yolo26n",
 }
 
 
@@ -869,7 +877,7 @@ def logout():
 def predict():
     user = get_current_user()
     file = request.files["file"]
-    model_name = request.form.get("model", "yolov8")
+    model_name = request.form.get("model", "yolov8s")
     username = user.username  # 使用当前登录用户
 
     filename = f"{int(time.time())}_{file.filename}"
@@ -1187,7 +1195,7 @@ def get_analysis():
 @require_auth
 def get_settings():
     default_model_setting = SystemSettings.query.filter_by(key='default_model').first()
-    default_model = default_model_setting.value if default_model_setting else 'yolov8'
+    default_model = default_model_setting.value if default_model_setting else 'yolov8s'
     
     confidence_setting = SystemSettings.query.filter_by(key='confidence_threshold').first()
     confidence_threshold = float(confidence_setting.value) if confidence_setting else 0.25
@@ -2459,7 +2467,7 @@ def video_detect():
         return jsonify({"error": "没有上传视频文件"}), 400
     
     file = request.files['video']
-    model_name = request.form.get('model', 'yolov8')
+    model_name = request.form.get('model', 'yolov8s')
     username = request.headers.get('X-Username') or 'anonymous'
     
     if file.filename == '':
@@ -2697,7 +2705,7 @@ def camera_detect():
     """摄像头实时检测单帧"""
     data = request.json
     image_data = data.get('image', '')
-    model_name = data.get('model', 'yolov8')
+    model_name = data.get('model', 'yolov8s')
     
     if not image_data:
         return jsonify({"error": "没有图像数据"}), 400
@@ -2894,7 +2902,7 @@ def get_models():
 
     # 系统模型 - 直接从内存获取，无需数据库查询
     system_models = []
-    for name in ['yolov8', 'yolo11', 'yolo26']:
+    for name in ['yolov8n', 'yolov8s', 'yolov8m', 'yolo11n', 'yolo11s', 'yolo11m', 'yolo26']:
         if name in models:
             system_models.append({
                 'id': name,
@@ -2969,7 +2977,7 @@ def train_model():
     try:
         model_name = request.form.get('name', '').strip()
         description = request.form.get('description', '')
-        base_model = request.form.get('base_model', 'yolov8')
+        base_model = request.form.get('base_model', 'yolov8s')
         epochs = int(request.form.get('epochs', 100))
         batch_size = int(request.form.get('batch_size', 16))
         img_size = int(request.form.get('img_size', 640))
@@ -3038,7 +3046,7 @@ def train_model():
             return jsonify({"error": f"解压数据集失败: {str(e)}"}), 400
 
     # 检查基础模型是否可用
-    supported_base_models = ['yolov8', 'yolo11', 'yolo26']
+    supported_base_models = ['yolov8n', 'yolov8s', 'yolov8m', 'yolo11n', 'yolo11s', 'yolo11m', 'yolo26n']
     is_continued_training = base_model not in supported_base_models
     base_model_info = None
 
@@ -3051,9 +3059,43 @@ def train_model():
             return jsonify({"error": "基础模型尚未训练完成，无法用于续训"}), 400
         actual_base_model = base_model_info.base_model
     else:
-        # 检查是否在已加载的models中
+        # 检查是否在已加载的models中，如果没有则尝试自动下载加载
         if base_model not in models:
-            return jsonify({"error": f"基础模型 {base_model} 未加载"}), 400
+            try:
+                print(f"基础模型 {base_model} 未加载，尝试自动下载...")
+                from ultralytics import YOLO
+                import shutil
+                
+                # 先尝试从 models 目录加载
+                model_path = os.path.join(MODELS_DIR, f"{base_model}.pt")
+                
+                if os.path.exists(model_path):
+                    # 如果 models 目录已存在，直接加载
+                    models[base_model] = YOLO(model_path)
+                    print(f"✓ 从 models 目录加载模型 {base_model}")
+                else:
+                    # 下载到当前目录，然后移动到 models 目录
+                    model_file = f"{base_model}.pt"
+                    temp_model = YOLO(model_file)
+                    
+                    # 获取下载后的文件路径（通常在当前目录或 ~/.ultralytics/models/）
+                    downloaded_path = os.path.join(os.getcwd(), model_file)
+                    if not os.path.exists(downloaded_path):
+                        # 尝试从 ultralytics 默认缓存目录查找
+                        ultralytics_cache = os.path.expanduser(f"~/.ultralytics/models/{model_file}")
+                        if os.path.exists(ultralytics_cache):
+                            downloaded_path = ultralytics_cache
+                    
+                    # 移动到 models 目录
+                    if os.path.exists(downloaded_path):
+                        shutil.move(downloaded_path, model_path)
+                        print(f"✓ 模型已移动到 {model_path}")
+                    
+                    # 重新从 models 目录加载
+                    models[base_model] = YOLO(model_path)
+                    print(f"✓ 成功下载并加载模型 {base_model}")
+            except Exception as e:
+                return jsonify({"error": f"基础模型 {base_model} 加载失败: {str(e)}"}), 400
         actual_base_model = base_model
 
     # 生成模型标识
@@ -3065,9 +3107,13 @@ def train_model():
     
     # 添加基础模型信息
     model_display_names = {
-        'yolov8': 'YOLOv8',
-        'yolo11': 'YOLO11',
-        'yolo26': 'YOLO26'
+        'yolov8n': 'YOLOv8n',
+        'yolov8s': 'YOLOv8s',
+        'yolov8m': 'YOLOv8m',
+        'yolo11n': 'YOLO11n',
+        'yolo11s': 'YOLO11s',
+        'yolo11m': 'YOLO11m',
+        'yolo26': 'YOLOv5'
     }
     
     # 构建基础模型描述
@@ -3228,7 +3274,8 @@ def train_model_task(task_id, model_id, base_model_path, dataset_dir, epochs, ba
                 'verbose': False,
                 'plots': True,
                 'save': True,
-                # 提升定位精度的参数
+                'workers': 4,       
+                'cache': False,     # 关闭磁盘缓存，减少内存占用
                 'box': 10.0,        # 增加定位损失权重（默认7.5）
                 'dfl': 2.0,         # 增加分布焦点损失（默认1.5）
                 'iou': 0.25,        # 降低IoU阈值，让模型更关注精确定位
