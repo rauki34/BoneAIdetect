@@ -4974,6 +4974,7 @@ def get_admin_dashboard():
             profile = DoctorProfile.query.filter_by(user_id=d.id).first()
             doctor_list.append({
                 "id": d.id,
+                "username": d.username,
                 "full_name": d.full_name,
                 "hospital": profile.hospital if profile else '',
                 "department": profile.department if profile else '',
@@ -4989,6 +4990,7 @@ def get_admin_dashboard():
             profile = PatientProfile.query.filter_by(user_id=p.id).first()
             patient_list.append({
                 "id": p.id,
+                "username": p.username,
                 "full_name": p.full_name,
                 "patient_number": profile.patient_number if profile else '',
                 "gender": profile.gender if profile else '',
@@ -5528,6 +5530,47 @@ def admin_update_user(user_id):
         db.session.rollback()
         print(f"更新用户信息失败: {e}")
         return jsonify({"error": "更新失败"}), 500
+
+
+@app.route("/api/admin/reset-password/<int:user_id>", methods=["POST"])
+@require_role('admin')
+def admin_reset_password(user_id):
+    """管理员重置用户密码"""
+    admin = get_current_user()
+    data = request.json
+    
+    user = db.session.get(User, user_id)
+    if not user:
+        return jsonify({"error": "用户不存在"}), 404
+    
+    # 不能重置管理员自己的密码
+    if user.id == admin.id:
+        return jsonify({"error": "不能通过此接口重置管理员密码"}), 400
+    
+    new_password = data.get("new_password", "").strip()
+    
+    # 验证密码
+    if not new_password:
+        return jsonify({"error": "请输入新密码"}), 400
+    if len(new_password) < 6:
+        return jsonify({"error": "密码长度至少为6位"}), 400
+    
+    try:
+        # 更新密码
+        user.password = generate_password_hash(new_password)
+        db.session.commit()
+        
+        log_operation(f"管理员重置用户密码:{user.username}")
+        
+        return jsonify({
+            "success": True,
+            "message": "密码重置成功"
+        })
+        
+    except Exception as e:
+        db.session.rollback()
+        print(f"重置密码失败: {e}")
+        return jsonify({"error": "密码重置失败"}), 500
 
 
 # -------------------- 忘记密码 API --------------------
@@ -6291,8 +6334,8 @@ def call_local_ai_assistant(messages):
         prompt += "助手："
         
         response = requests.post(
-            f"{AI_SERVICE_URL}/generate",
-            json={"prompt": prompt, "max_length": 500},
+            f"{AI_SERVICE_URL}/chat",
+            json={"prompt": prompt},
             timeout=30
         )
         

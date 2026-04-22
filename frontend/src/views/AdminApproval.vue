@@ -125,6 +125,7 @@
           <el-card shadow="never">
             <el-table :data="doctors" style="width: 100%">
               <el-table-column prop="full_name" label="姓名" width="100" />
+              <el-table-column prop="username" label="账号" width="120" />
               <el-table-column prop="hospital" label="所属医院" width="150" />
               <el-table-column prop="department" label="科室" width="120" />
               <el-table-column prop="title" label="职称" width="100" />
@@ -136,11 +137,11 @@
                   </el-tag>
                 </template>
               </el-table-column>
-              <el-table-column label="操作" width="200" fixed="right">
+              <el-table-column label="操作" width="250" fixed="right">
                 <template #default="{ row }">
                   <el-button link type="primary" @click="viewDoctor(row)">查看</el-button>
                   <el-button link type="primary" @click="editDoctor(row)">编辑</el-button>
-                  <el-button link type="danger" @click="disableDoctor(row)">停用</el-button>
+                  <el-button link type="warning" @click="resetPassword(row)">重置密码</el-button>
                 </template>
               </el-table-column>
             </el-table>
@@ -153,6 +154,7 @@
           <el-card shadow="never">
             <el-table :data="patients.filter(p => p.full_name)" style="width: 100%">
               <el-table-column prop="full_name" label="姓名" width="100" />
+              <el-table-column prop="username" label="账号" width="120" />
               <el-table-column prop="patient_number" label="病历号" width="120" />
               <el-table-column prop="gender" label="性别" width="80" />
               <el-table-column prop="phone" label="联系电话" width="130" />
@@ -161,10 +163,11 @@
                   {{ formatDate(row.created_at) }}
                 </template>
               </el-table-column>
-              <el-table-column label="操作" width="150" fixed="right">
+              <el-table-column label="操作" width="200" fixed="right">
                 <template #default="{ row }">
                   <el-button link type="primary" @click="viewPatient(row)">查看</el-button>
                   <el-button link type="primary" @click="editPatient(row)">编辑</el-button>
+                  <el-button link type="warning" @click="resetPassword(row)">重置密码</el-button>
                 </template>
               </el-table-column>
             </el-table>
@@ -1764,6 +1767,7 @@
     <el-dialog v-model="doctorDetailVisible" title="医生详情" width="600px">
       <el-descriptions :column="2" border v-if="selectedDoctorDetail">
         <el-descriptions-item label="姓名">{{ selectedDoctorDetail.full_name }}</el-descriptions-item>
+        <el-descriptions-item label="账号">{{ selectedDoctorDetail.username }}</el-descriptions-item>
         <el-descriptions-item label="所属医院">{{ selectedDoctorDetail.hospital }}</el-descriptions-item>
         <el-descriptions-item label="科室">{{ selectedDoctorDetail.department }}</el-descriptions-item>
         <el-descriptions-item label="职称">{{ selectedDoctorDetail.title }}</el-descriptions-item>
@@ -1780,6 +1784,7 @@
     <el-dialog v-model="patientDetailVisible" title="患者详情" width="600px">
       <el-descriptions :column="2" border v-if="selectedPatientDetail">
         <el-descriptions-item label="姓名">{{ selectedPatientDetail.full_name }}</el-descriptions-item>
+        <el-descriptions-item label="账号">{{ selectedPatientDetail.username }}</el-descriptions-item>
         <el-descriptions-item label="病历号">{{ selectedPatientDetail.patient_number }}</el-descriptions-item>
         <el-descriptions-item label="性别">{{ selectedPatientDetail.gender }}</el-descriptions-item>
         <el-descriptions-item label="联系电话">{{ selectedPatientDetail.phone }}</el-descriptions-item>
@@ -1877,6 +1882,38 @@
         <el-button type="primary" :loading="savingPatient" @click="savePatientEdit">保存</el-button>
       </template>
     </el-dialog>
+
+    <!-- 重置密码弹窗 -->
+    <el-dialog v-model="resetPasswordVisible" title="重置密码" width="450px">
+      <el-form :model="resetPasswordForm" label-width="100px" v-if="resetPasswordUser">
+        <el-form-item label="用户姓名">
+          <el-input v-model="resetPasswordUser.full_name" disabled />
+        </el-form-item>
+        <el-form-item label="账号">
+          <el-input v-model="resetPasswordUser.username" disabled />
+        </el-form-item>
+        <el-form-item label="新密码" required>
+          <el-input 
+            v-model="resetPasswordForm.newPassword" 
+            type="password" 
+            placeholder="请输入新密码"
+            show-password
+          />
+        </el-form-item>
+        <el-form-item label="确认密码" required>
+          <el-input 
+            v-model="resetPasswordForm.confirmPassword" 
+            type="password" 
+            placeholder="请再次输入新密码"
+            show-password
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="resetPasswordVisible = false">取消</el-button>
+        <el-button type="primary" :loading="resettingPassword" @click="confirmResetPassword">确认重置</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -1916,6 +1953,15 @@ const editingDoctor = ref({})
 const editingPatient = ref({})
 const savingDoctor = ref(false)
 const savingPatient = ref(false)
+
+// 重置密码相关数据
+const resetPasswordVisible = ref(false)
+const resetPasswordUser = ref(null)
+const resetPasswordForm = reactive({
+  newPassword: '',
+  confirmPassword: ''
+})
+const resettingPassword = ref(false)
 
 // 公告管理相关数据
 const announcements = ref([])
@@ -2451,6 +2497,43 @@ const savePatientEdit = async () => {
     ElMessage.error(err.response?.data?.error || '更新失败')
   } finally {
     savingPatient.value = false
+  }
+}
+
+// 重置密码方法
+const resetPassword = (row) => {
+  resetPasswordUser.value = row
+  resetPasswordForm.newPassword = ''
+  resetPasswordForm.confirmPassword = ''
+  resetPasswordVisible.value = true
+}
+
+const confirmResetPassword = async () => {
+  // 验证密码
+  if (!resetPasswordForm.newPassword) {
+    ElMessage.warning('请输入新密码')
+    return
+  }
+  if (resetPasswordForm.newPassword.length < 6) {
+    ElMessage.warning('密码长度至少为6位')
+    return
+  }
+  if (resetPasswordForm.newPassword !== resetPasswordForm.confirmPassword) {
+    ElMessage.warning('两次输入的密码不一致')
+    return
+  }
+  
+  resettingPassword.value = true
+  try {
+    await axios.post(`/api/admin/reset-password/${resetPasswordUser.value.id}`, {
+      new_password: resetPasswordForm.newPassword
+    })
+    ElMessage.success('密码重置成功')
+    resetPasswordVisible.value = false
+  } catch (err) {
+    ElMessage.error(err.response?.data?.error || '密码重置失败')
+  } finally {
+    resettingPassword.value = false
   }
 }
 
