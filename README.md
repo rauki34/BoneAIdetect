@@ -6,7 +6,7 @@
 
 ## 项目概述
 
-本项目是一个面向医疗场景的骨折检测与诊疗管理系统，采用前后端分离架构，支持三种角色（管理员/医生/患者）的协同工作。系统通过YOLO计算机视觉技术自动识别X光片中的骨折部位，并结合大语言模型生成专业的医疗建议。
+本项目是一个面向医疗场景的骨折检测与诊疗管理系统，采用前后端分离架构，支持三种角色（管理员/医生/患者）的协同工作。系统通过YOLO计算机视觉技术自动识别X光片中的骨折部位，并结合多模态大语言模型生成专业的医疗建议。
 
 ### 核心功能
 
@@ -59,8 +59,18 @@
 | SQLite             | 3.x     | 轻量级数据库        |
 | Optuna             | ^4.8.0  | 超参数优化         |
 | Transformers       | ^4.57.3 | 大模型加载         |
-| OpenAI             | ^2.14.0 | OpenAI API客户端 |
-| ModelScope         | ^1.33.0 | 魔搭社区模型        |
+| Accelerate         | ^1.12.0 | 模型加速          |
+| bitsandbytes       | ^0.49.2 | 4-bit量化        |
+
+### AI服务技术栈
+
+| 技术           | 版本      | 用途       |
+| ------------ | ------- | -------- |
+| Flask        | ^3.1.2  | Web框架    |
+| Transformers | ^4.57.3 | 大模型加载与推理 |
+| PyTorch      | ^2.7.1  | 深度学习框架   |
+| bitsandbytes | ^0.49.2 | 4-bit量化  |
+| Pillow       | ^12.1.0 | 图像处理     |
 
 ***
 
@@ -91,10 +101,15 @@ grauateDesign/
 │   │   ├── router/          # 路由配置
 │   │   │   └── index.js
 │   │   ├── utils/           # 工具函数
+│   │   │   ├── axios.js     # Axios配置和拦截器
+│   │   │   ├── datetime.js  # 日期时间工具
+│   │   │   └── notifications.js  # 通知工具
 │   │   ├── App.vue
-│   │   └── main.js
+│   │   ├── main.js
+│   │   └── style.css
 │   ├── package.json
-│   └── vite.config.js
+│   ├── vite.config.js
+│   └── index.html
 │
 ├── backend/                  # 后端项目
 │   ├── app.py               # 主应用入口
@@ -103,25 +118,23 @@ grauateDesign/
 │   ├── hyperparameter_optimization.py  # 超参数优化
 │   ├── reset_admin.py       # 管理员重置工具
 │   ├── requirements.txt     # Python依赖
+│   ├── migrations/          # 数据库迁移
+│   │   ├── versions/
+│   │   ├── alembic.ini
+│   │   ├── env.py
+│   │   └── script.py.mako
 │   ├── models/              # YOLO模型文件
 │   ├── uploads/             # 上传文件存储
 │   ├── results/             # 检测结果存储
 │   └── instance/            # SQLite数据库文件
 │
 ├── AI/                       # AI服务
-│   ├── app.py               # AI服务入口
-│   ├── Qwen3-VL-4B-Instruct/ # 多模态大模型
+│   ├── app.py               # AI服务入口（Qwen3-VL-4B多模态模型）
 │   └── requirements.txt
 │
-├── dataset/                  # 数据集
-│   └── break-bone/          # 骨折检测数据集
+├── requirements-all.txt     # 完整依赖清单
 │
-├── venv/                     # Python虚拟环境
-│
-└── testpackage/             # 测试资源
-    ├── 测试图片/
-    ├── 测试视频/
-    └── 测试数据集/
+└── venv/                     # Python虚拟环境
 ```
 
 ***
@@ -170,6 +183,21 @@ pip install -r backend/requirements.txt
 
 # 安装AI服务依赖
 pip install -r AI/requirements.txt
+
+# 或者一次性安装所有依赖
+pip install -r requirements-all.txt
+```
+
+**注意**：PyTorch建议根据CUDA版本单独安装：
+```bash
+# CUDA 11.8
+pip install torch==2.7.1 torchvision==0.22.1 torchaudio==2.7.1 --index-url https://download.pytorch.org/whl/cu118
+
+# CUDA 12.1
+pip install torch==2.7.1 torchvision==0.22.1 torchaudio==2.7.1 --index-url https://download.pytorch.org/whl/cu121
+
+# CPU only
+pip install torch==2.7.1 torchvision==0.22.1 torchaudio==2.7.1 --index-url https://download.pytorch.org/whl/cpu
 ```
 
 #### 4. 安装前端依赖
@@ -307,19 +335,20 @@ waitress-serve --port=5000 app:app
 
 | 表名                         | 说明     | 主要字段                                                                               |
 | -------------------------- | ------ | ---------------------------------------------------------------------------------- |
-| users                      | 用户表    | username, password, role, full\_name, email, phone                                 |
-| doctor\_profiles           | 医生资料   | user\_id, department, title, license\_number, hospital, status                     |
-| patient\_profiles          | 患者资料   | user\_id, patient\_number, gender, birth\_date, address, allergies                 |
-| doctor\_patient\_relations | 医患关系   | doctor\_id, patient\_id, is\_primary, status                                       |
-| detection\_history         | 检测历史   | username, patient\_id, filename, model, detections, confidence, medical\_advice    |
-| medical\_records           | 病历记录   | record\_number, patient\_id, doctor\_id, diagnosis, treatment, prescription        |
-| custom\_models             | 自定义模型  | name, model\_key, status, accuracy, map50, map50\_95, precision, recall, f1\_score |
-| training\_tasks            | 训练任务   | model\_id, epochs, progress, status, loss, val\_loss                               |
-| doctor\_registrations      | 医生注册申请 | username, full\_name, department, title, license\_number, status                   |
-| announcements              | 系统公告   | title, content, target\_role, priority, is\_active                                 |
-| messages                   | 消息通知   | sender\_id, receiver\_id, title, content, message\_type, is\_read                  |
-| operation\_logs            | 操作日志   | username, method, url, description, success, ip                                    |
-| ai\_conversations          | AI对话   | patient\_id, session\_id, message\_type, message\_content                          |
+| users                      | 用户表    | username, password, role, full_name, email, phone                                 |
+| doctor_profiles            | 医生资料   | user_id, department, title, license_number, hospital, status                     |
+| patient_profiles           | 患者资料   | user_id, patient_number, gender, birth_date, address, allergies                 |
+| doctor_patient_relations   | 医患关系   | doctor_id, patient_id, is_primary, status                                       |
+| detection_history          | 检测历史   | username, patient_id, filename, model, detections, confidence, medical_advice    |
+| medical_records            | 病历记录   | record_number, patient_id, doctor_id, diagnosis, treatment, prescription        |
+| custom_models              | 自定义模型  | name, model_key, status, accuracy, map50, map50_95, precision, recall, f1_score |
+| training_tasks             | 训练任务   | model_id, epochs, progress, status, loss, val_loss                               |
+| doctor_registrations       | 医生注册申请 | username, full_name, department, title, license_number, status                   |
+| announcements              | 系统公告   | title, content, target_role, priority, is_active                                 |
+| messages                   | 消息通知   | sender_id, receiver_id, title, content, message_type, is_read                  |
+| operation_logs             | 操作日志   | username, method, url, description, success, ip                                  |
+| ai_conversations           | AI对话   | patient_id, session_id, message_type, message_content                          |
+| datasets                   | 数据集    | name, dataset_path, num_images, num_classes, class_names                         |
 
 ***
 
@@ -341,31 +370,26 @@ waitress-serve --port=5000 app:app
 
 ### 患者管理接口
 
-- `GET/POST /api/patients` - 患者列表/创建
-- `GET/PUT/DELETE /api/patients/{id}` - 患者详情/更新/删除
-- `GET /api/patient/doctors` - 患者的主治医生
-- `GET /api/patient/medical-records` - 患者的病历
+- `GET/POST /api/doctor/patients` - 患者列表/创建
+- `GET /api/patient/profile` - 患者资料
+- `GET /api/patient/medical-records` - 患者病历
 
 ### 医生管理接口
 
-- `GET /api/doctor/patients` - 医生的患者列表
-- `POST /api/doctor/patients` - 医生添加患者
-- `GET/POST /api/doctor/medical-records` - 病历列表/创建
 - `GET /api/doctor/dashboard` - 医生工作台数据
+- `GET /api/doctor/reports` - 医生报告列表
 - `POST /api/doctor/register` - 医生入驻申请
 
 ### 管理员接口
 
 - `GET/POST /api/users` - 用户列表/创建
-- `GET /api/admin/doctor-registrations` - 医生注册审核列表
-- `POST /api/admin/doctor-registrations/{id}/review` - 审核医生注册
 - `GET /api/admin/dashboard` - 管理员仪表盘
 - `GET /api/admin/statistics` - 系统统计
+- `POST /api/admin/approve-doctor/{id}` - 审核医生注册
 
 ### 模型管理接口
 
 - `GET /api/models` - 模型列表
-- `GET /api/models/published` - 已发布模型
 - `POST /api/models/train` - 创建训练任务
 - `POST /api/models/{id}/publish` - 发布模型
 - `GET /api/training/tasks` - 训练任务列表
@@ -374,10 +398,13 @@ waitress-serve --port=5000 app:app
 
 - `GET /api/messages/contacts` - 消息联系人
 - `POST /api/messages/send` - 发送消息
-- `GET /api/messages/unread-count` - 未读消息数
 - `GET /api/announcements` - 公告列表
 
-详细API文档请参考：[backend/API文档.md](backend/API文档.md)
+### AI助手接口
+
+- `POST /api/ai-assistant/chat` - AI助手对话
+- `GET /api/ai-assistant/history` - 对话历史
+- `GET /api/ai-assistant/sessions` - 会话列表
 
 ***
 
@@ -398,8 +425,9 @@ waitress-serve --port=5000 app:app
 
 ## 相关文档
 
-- [AI服务配置说明.md](AI服务配置说明.md) - AI服务配置说明
-- [项目大纲.md](项目大纲.md) - 项目架构说明
+- [项目大纲.md](项目大纲.md) - 项目架构详细说明
+- [AI服务配置说明.md](AI服务配置说明.md) - AI服务配置详细说明
+- [改进方案文档.md](改进方案文档.md) - 项目改进方案
 
 ***
 
