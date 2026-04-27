@@ -6,8 +6,8 @@
       :class="{ active: isOpen }"
       @click="toggleChat"
     >
-      <el-icon v-if="!isOpen" size="28"><ChatDotRound /></el-icon>
-      <el-icon v-else size="28"><Close /></el-icon>
+      <el-icon v-if="!isOpen" size="26"><ChatDotRound /></el-icon>
+      <el-icon v-else size="26"><Close /></el-icon>
       <div v-if="unreadCount > 0" class="unread-badge">{{ unreadCount }}</div>
     </div>
 
@@ -17,79 +17,66 @@
         <!-- 头部 -->
         <div class="chat-header">
           <div class="header-left">
-            <el-icon size="20"><ChatDotRound /></el-icon>
-            <span class="header-title">AI健康助手</span>
-            <el-tag size="small" type="success" effect="light">在线</el-tag>
+            <div class="header-icon">
+              <el-icon size="18"><ChatDotRound /></el-icon>
+            </div>
+            <span class="header-title">健康助手</span>
+            <span class="status-dot"></span>
           </div>
           <div class="header-actions">
-            <el-button
-              text
-              circle
-              size="small"
-              @click="toggleMaximize"
-              :icon="isMaximized ? CopyDocument : FullScreen"
-            />
-            <el-button
-              text
-              circle
-              size="small"
-              @click="clearChat"
-              :icon="Delete"
-              title="清空对话"
-            />
-            <el-button
-              text
-              circle
-              size="small"
-              @click="toggleChat"
-              :icon="Close"
-            />
+            <button class="action-btn" @click="toggleMaximize" :title="isMaximized ? '还原' : '最大化'">
+              <el-icon size="16"><component :is="isMaximized ? CopyDocument : FullScreen" /></el-icon>
+            </button>
+            <button class="action-btn" @click="clearChat" title="清空对话">
+              <el-icon size="16"><Delete /></el-icon>
+            </button>
+            <button class="action-btn close" @click="toggleChat" title="关闭">
+              <el-icon size="16"><Close /></el-icon>
+            </button>
           </div>
         </div>
 
         <!-- 免责声明 -->
         <div v-if="showDisclaimer" class="disclaimer-section">
-          <el-alert
-            type="warning"
-            :closable="false"
-            show-icon
-          >
-            <template #title>
-              <span class="disclaimer-title">医疗免责声明</span>
-            </template>
+          <div class="disclaimer-box">
+            <div class="disclaimer-icon">
+              <el-icon size="20" color="#f59e0b"><Warning /></el-icon>
+            </div>
             <div class="disclaimer-content">
-              <p>本AI助手提供的信息仅供参考，不能替代专业医生的诊断和治疗建议。</p>
+              <h4>医疗免责声明</h4>
+              <p>本助手提供的信息仅供参考，不能替代专业医生的诊断和治疗建议。</p>
               <p>如有紧急医疗问题，请立即联系您的主治医生或前往医院就诊。</p>
             </div>
-            <div class="disclaimer-actions">
-              <el-button type="primary" size="small" @click="acceptDisclaimer">
-                我已了解并同意
-              </el-button>
-            </div>
-          </el-alert>
+            <button class="disclaimer-btn" @click="acceptDisclaimer">
+              我已了解并同意
+            </button>
+          </div>
         </div>
 
         <!-- 消息区域 -->
         <div v-else ref="messagesContainer" class="messages-container">
           <!-- 欢迎消息 -->
           <div v-if="messages.length === 0" class="welcome-section">
-            <div class="welcome-icon">
-              <el-icon size="48" color="#3b82f6"><FirstAidKit /></el-icon>
+            <div class="welcome-card">
+              <div class="welcome-icon">
+                <el-icon size="36" color="#0d9488"><FirstAidKit /></el-icon>
+              </div>
+              <h3 class="welcome-title">您好！我是您的健康助手</h3>
+              <p class="welcome-desc">我可以帮您解答关于骨折康复、日常护理等方面的问题</p>
             </div>
-            <h3 class="welcome-title">您好！我是您的AI健康助手</h3>
-            <p class="welcome-desc">我可以帮您解答关于骨折康复、日常护理等方面的问题</p>
             <div class="quick-questions">
-              <div class="quick-title">常见问题：</div>
-              <div class="quick-tags">
-                <el-tag
-                  v-for="question in quickQuestions"
-                  :key="question"
-                  class="quick-tag"
-                  effect="light"
-                  @click="sendQuickQuestion(question)"
+              <div class="quick-label">您可能想了解</div>
+              <div class="quick-chips">
+                <button
+                  v-for="(item, index) in quickQuestions"
+                  :key="item.text"
+                  class="quick-chip"
+                  :class="`chip-${index % 5}`"
+                  @click="sendQuickQuestion(item.text)"
                 >
-                  {{ question }}
-                </el-tag>
+                  <span class="chip-dot"></span>
+                  {{ item.text }}
+                </button>
               </div>
             </div>
           </div>
@@ -98,18 +85,15 @@
           <template v-else>
             <div
               v-for="(msg, index) in messages"
-              :key="index"
+              :key="msg.timestamp?.getTime?.() || index"
               :class="['message-item', msg.role]"
             >
               <div class="message-avatar">
-                <el-avatar
-                  v-if="msg.role === 'user'"
-                  :size="36"
-                  :icon="UserFilled"
-                  class="user-avatar"
-                />
+                <div v-if="msg.role === 'user'" class="user-avatar">
+                  <el-icon size="16"><UserFilled /></el-icon>
+                </div>
                 <div v-else class="ai-avatar">
-                  <el-icon size="20"><Cpu /></el-icon>
+                  <el-icon size="16"><FirstAidKit /></el-icon>
                 </div>
               </div>
               <div class="message-content">
@@ -122,16 +106,14 @@
                 </div>
                 <div class="message-meta">
                   <span class="message-time">{{ formatTime(msg.timestamp) }}</span>
-                  <el-button
+                  <button
                     v-if="msg.role === 'assistant'"
-                    link
-                    type="primary"
-                    size="small"
-                    :icon="CopyDocument"
+                    class="copy-btn"
                     @click="copyMessage(msg.content)"
                   >
+                    <el-icon size="12"><CopyDocument /></el-icon>
                     复制
-                  </el-button>
+                  </button>
                 </div>
               </div>
             </div>
@@ -141,7 +123,7 @@
           <div v-if="isLoading" class="message-item assistant">
             <div class="message-avatar">
               <div class="ai-avatar">
-                <el-icon size="20"><Cpu /></el-icon>
+                <el-icon size="16"><FirstAidKit /></el-icon>
               </div>
             </div>
             <div class="message-content">
@@ -159,27 +141,30 @@
         <!-- 输入区域 -->
         <div v-if="!showDisclaimer" class="input-section">
           <div class="input-wrapper">
-            <el-input
-              v-model="inputMessage"
-              type="textarea"
-              :rows="2"
-              placeholder="请输入您的问题..."
-              :disabled="isLoading"
-              maxlength="500"
-              show-word-limit
-              @keydown.enter.exact.prevent="sendMessage"
-            />
-            <div class="input-actions">
-              <span class="input-hint">按 Enter 发送，Shift + Enter 换行</span>
-              <el-button
-                type="primary"
+            <div class="input-box">
+              <textarea
+                v-model="inputMessage"
+                :rows="2"
+                placeholder="请输入您的问题..."
+                :disabled="isLoading"
+                maxlength="500"
+                @keydown.enter.exact.prevent="sendMessage"
+              ></textarea>
+            </div>
+            <div class="input-toolbar">
+              <span class="input-hint">
+                <el-icon size="12"><InfoFilled /></el-icon>
+                按 Enter 发送
+              </span>
+              <button
+                class="send-btn"
                 :disabled="!inputMessage.trim() || isLoading"
-                :loading="isLoading"
+                :class="{ loading: isLoading }"
                 @click="sendMessage"
               >
-                <el-icon><Promotion /></el-icon>
-                发送
-              </el-button>
+                <span v-if="!isLoading" class="send-text">发送</span>
+                <span v-else class="loading-spinner"></span>
+              </button>
             </div>
           </div>
         </div>
@@ -197,10 +182,15 @@ import {
   FullScreen,
   CopyDocument,
   Delete,
-  Promotion,
   UserFilled,
-  Cpu,
-  FirstAidKit
+  FirstAidKit,
+  Warning,
+  InfoFilled,
+  Clock,
+  Food,
+  QuestionFilled,
+  TrendCharts,
+  ArrowRight
 } from '@element-plus/icons-vue'
 import axios from '../utils/axios'
 
@@ -214,13 +204,22 @@ const messagesContainer = ref(null)
 const unreadCount = ref(0)
 const sessionId = ref('')
 
+// 常量定义
+const STORAGE_KEYS = {
+  SESSION_ID: 'ai_assistant_session_id',
+  SESSION_TIME: 'ai_assistant_session_time',
+  DISCLAIMER_ACCEPTED: 'ai_assistant_disclaimer_accepted'
+}
+
+const SESSION_DURATION = 24 * 60 * 60 * 1000 // 24小时
+
 // 常见问题
 const quickQuestions = [
-  '骨折后多久可以恢复？',
-  '骨折康复期需要注意什么？',
-  '骨折后饮食有什么建议？',
-  '如何判断骨折愈合情况？',
-  '骨折后可以做哪些康复运动？'
+  { text: '骨折后多久可以恢复？' },
+  { text: '骨折康复期需要注意什么？' },
+  { text: '骨折后饮食有什么建议？' },
+  { text: '如何判断骨折愈合情况？' },
+  { text: '骨折后可以做哪些康复运动？' }
 ]
 
 // 切换聊天窗口
@@ -245,7 +244,11 @@ const toggleMaximize = () => {
 // 接受免责声明
 const acceptDisclaimer = () => {
   showDisclaimer.value = false
-  localStorage.setItem('ai_assistant_disclaimer_accepted', 'true')
+  try {
+    localStorage.setItem(STORAGE_KEYS.DISCLAIMER_ACCEPTED, 'true')
+  } catch (e) {
+    console.warn('localStorage 不可用:', e)
+  }
   nextTick(() => {
     scrollToBottom()
   })
@@ -258,28 +261,40 @@ const generateSessionId = () => {
 
 // 初始化会话
 const initSession = () => {
-  const savedSessionId = localStorage.getItem('ai_assistant_session_id')
-  const savedSessionTime = localStorage.getItem('ai_assistant_session_time')
-  const disclaimerAccepted = localStorage.getItem('ai_assistant_disclaimer_accepted')
-  
+  let savedSessionId = null
+  let savedSessionTime = null
+  let disclaimerAccepted = null
+
+  try {
+    savedSessionId = localStorage.getItem(STORAGE_KEYS.SESSION_ID)
+    savedSessionTime = localStorage.getItem(STORAGE_KEYS.SESSION_TIME)
+    disclaimerAccepted = localStorage.getItem(STORAGE_KEYS.DISCLAIMER_ACCEPTED)
+  } catch (e) {
+    console.warn('localStorage 不可用:', e)
+  }
+
   // 检查免责声明
   showDisclaimer.value = disclaimerAccepted !== 'true'
-  
-  // 检查会话是否过期（24小时）
+
+  // 检查会话是否过期
   const now = Date.now()
   if (savedSessionId && savedSessionTime) {
     const elapsed = now - parseInt(savedSessionTime)
-    if (elapsed < 24 * 60 * 60 * 1000) {
+    if (elapsed < SESSION_DURATION) {
       sessionId.value = savedSessionId
       loadChatHistory()
       return
     }
   }
-  
+
   // 创建新会话
   sessionId.value = generateSessionId()
-  localStorage.setItem('ai_assistant_session_id', sessionId.value)
-  localStorage.setItem('ai_assistant_session_time', now.toString())
+  try {
+    localStorage.setItem(STORAGE_KEYS.SESSION_ID, sessionId.value)
+    localStorage.setItem(STORAGE_KEYS.SESSION_TIME, now.toString())
+  } catch (e) {
+    console.warn('localStorage 不可用:', e)
+  }
 }
 
 // 加载聊天历史
@@ -362,8 +377,13 @@ const clearChat = () => {
   messages.value = []
   // 创建新会话
   sessionId.value = generateSessionId()
-  localStorage.setItem('ai_assistant_session_id', sessionId.value)
-  localStorage.setItem('ai_assistant_session_time', Date.now().toString())
+  const now = Date.now()
+  try {
+    localStorage.setItem(STORAGE_KEYS.SESSION_ID, sessionId.value)
+    localStorage.setItem(STORAGE_KEYS.SESSION_TIME, now.toString())
+  } catch (e) {
+    console.warn('localStorage 不可用:', e)
+  }
   ElMessage.success('对话已清空')
 }
 
@@ -380,21 +400,21 @@ const copyMessage = async (content) => {
 // 格式化消息（简单的文本格式化）
 const formatMessage = (content) => {
   if (!content) return ''
-  // 转义HTML
-  let formatted = content
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-  
+
+  // 使用 DOM API 进行安全的 HTML 转义
+  const div = document.createElement('div')
+  div.textContent = content
+  let formatted = div.innerHTML
+
   // 处理换行
   formatted = formatted.replace(/\n/g, '<br>')
-  
-  // 处理粗体 **text**
-  formatted = formatted.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-  
+
+  // 处理粗体 **text**（在转义后替换，确保安全）
+  formatted = formatted.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+
   // 处理斜体 *text*
-  formatted = formatted.replace(/\*(.*?)\*/g, '<em>$1</em>')
-  
+  formatted = formatted.replace(/\*(.+?)\*/g, '<em>$1</em>')
+
   return formatted
 }
 
@@ -449,143 +469,241 @@ defineExpose({
   bottom: 30px;
   right: 30px;
   z-index: 9999;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
 }
 
-/* 悬浮按钮 */
+/* 悬浮按钮 - 简约医疗风 */
 .floating-btn {
-  width: 60px;
-  height: 60px;
-  border-radius: 50%;
-  background: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%);
+  width: 56px;
+  height: 56px;
+  border-radius: 16px;
+  background: #ffffff;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  box-shadow: 0 4px 15px rgba(59, 130, 246, 0.4);
-  transition: all 0.3s ease;
-  color: white;
+  box-shadow: 
+    0 4px 20px rgba(13, 148, 136, 0.15),
+    0 1px 3px rgba(0, 0, 0, 0.05),
+    inset 0 1px 0 rgba(255, 255, 255, 0.8);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  color: #0d9488;
   position: relative;
+  border: 1px solid #e2e8f0;
 }
 
 .floating-btn:hover {
-  transform: scale(1.1) rotate(5deg);
-  box-shadow: 0 6px 20px rgba(59, 130, 246, 0.5);
+  transform: translateY(-2px) scale(1.02);
+  box-shadow: 
+    0 8px 30px rgba(13, 148, 136, 0.2),
+    0 2px 8px rgba(0, 0, 0, 0.05);
+  background: #f0fdfa;
+  border-color: #99f6e4;
+}
+
+.floating-btn:active {
+  transform: translateY(0) scale(0.98);
 }
 
 .floating-btn.active {
-  background: linear-gradient(135deg, #ef4444 0%, #f97316 100%);
-  box-shadow: 0 4px 15px rgba(239, 68, 68, 0.4);
+  background: #fef2f2;
+  color: #ef4444;
+  border-color: #fecaca;
+  box-shadow: 
+    0 4px 20px rgba(239, 68, 68, 0.15),
+    0 1px 3px rgba(0, 0, 0, 0.05);
 }
 
 .unread-badge {
   position: absolute;
-  top: -2px;
-  right: -2px;
-  width: 20px;
+  top: -4px;
+  right: -4px;
+  min-width: 20px;
   height: 20px;
+  padding: 0 6px;
   background: #ef4444;
-  border-radius: 50%;
+  border-radius: 10px;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 12px;
-  font-weight: bold;
+  font-size: 11px;
+  font-weight: 600;
   color: white;
   border: 2px solid white;
+  box-shadow: 0 2px 4px rgba(239, 68, 68, 0.3);
 }
 
-/* 对话窗口 */
+/* 对话窗口 - 明亮大气 */
 .chat-window {
   position: absolute;
-  bottom: 80px;
+  bottom: 72px;
   right: 0;
-  width: 400px;
-  height: 600px;
-  background: white;
-  border-radius: 16px;
-  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+  width: 420px;
+  height: 620px;
+  background: #ffffff;
+  border-radius: 24px;
+  box-shadow: 
+    0 25px 80px rgba(0, 0, 0, 0.12),
+    0 10px 30px rgba(0, 0, 0, 0.08),
+    0 0 0 1px rgba(0, 0, 0, 0.03);
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  transition: all 0.3s ease;
+  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .chat-window.maximized {
-  width: 700px;
+  width: 720px;
   height: 80vh;
 }
 
 /* 窗口动画 */
-.chat-window-enter-active,
-.chat-window-leave-active {
-  transition: all 0.3s ease;
+.chat-window-enter-active {
+  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-.chat-window-enter-from,
+.chat-window-leave-active {
+  transition: all 0.25s cubic-bezier(0.4, 0, 1, 1);
+}
+
+.chat-window-enter-from {
+  opacity: 0;
+  transform: translateY(20px) scale(0.96);
+}
+
 .chat-window-leave-to {
   opacity: 0;
-  transform: translateY(20px) scale(0.95);
+  transform: translateY(10px) scale(0.98);
 }
 
-/* 头部 */
+/* 头部 - 清新简洁 */
 .chat-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 16px 20px;
-  background: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%);
-  color: white;
+  background: #ffffff;
+  border-bottom: 1px solid #f1f5f9;
 }
 
 .header-left {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
+}
+
+.header-icon {
+  width: 36px;
+  height: 36px;
+  background: #f0fdfa;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #0d9488;
 }
 
 .header-title {
   font-size: 16px;
   font-weight: 600;
+  color: #0f172a;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  background: #10b981;
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px #ffffff, 0 0 0 4px #d1fae5;
 }
 
 .header-actions {
   display: flex;
-  gap: 4px;
+  gap: 6px;
 }
 
-.header-actions .el-button {
-  color: white;
+.action-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  border: none;
+  background: transparent;
+  color: #64748b;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
 }
 
-.header-actions .el-button:hover {
-  background: rgba(255, 255, 255, 0.2);
+.action-btn:hover {
+  background: #f1f5f9;
+  color: #0f172a;
 }
 
-/* 免责声明 */
+.action-btn.close:hover {
+  background: #fef2f2;
+  color: #ef4444;
+}
+
+/* 免责声明 - 温暖警示 */
 .disclaimer-section {
   padding: 20px;
   background: #fffbeb;
-  border-bottom: 1px solid #fcd34d;
+  border-bottom: 1px solid #fef3c7;
 }
 
-.disclaimer-title {
+.disclaimer-box {
+  background: #ffffff;
+  border-radius: 16px;
+  padding: 20px;
+  box-shadow: 0 2px 8px rgba(245, 158, 11, 0.08);
+  border: 1px solid #fef3c7;
+}
+
+.disclaimer-icon {
+  width: 44px;
+  height: 44px;
+  background: #fff7ed;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 12px;
+}
+
+.disclaimer-content h4 {
+  font-size: 15px;
   font-weight: 600;
   color: #92400e;
-}
-
-.disclaimer-content {
-  margin: 12px 0;
-  font-size: 13px;
-  color: #78350f;
-  line-height: 1.6;
+  margin: 0 0 8px 0;
 }
 
 .disclaimer-content p {
+  font-size: 13px;
+  color: #a16207;
   margin: 4px 0;
+  line-height: 1.5;
 }
 
-.disclaimer-actions {
-  margin-top: 12px;
+.disclaimer-btn {
+  width: 100%;
+  margin-top: 16px;
+  padding: 10px 20px;
+  background: #f59e0b;
+  color: white;
+  border: none;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.disclaimer-btn:hover {
+  background: #d97706;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(245, 158, 11, 0.3);
 }
 
 /* 消息区域 */
@@ -593,67 +711,128 @@ defineExpose({
   flex: 1;
   overflow-y: auto;
   padding: 20px;
-  background: #f8fafc;
+  background: #fafafa;
 }
 
 /* 欢迎区域 */
 .welcome-section {
   display: flex;
   flex-direction: column;
-  align-items: center;
+  gap: 24px;
+}
+
+.welcome-card {
+  background: #ffffff;
+  border-radius: 20px;
+  padding: 32px 24px;
   text-align: center;
-  padding: 40px 20px;
+  box-shadow: 
+    0 4px 20px rgba(0, 0, 0, 0.03),
+    0 1px 3px rgba(0, 0, 0, 0.02);
+  border: 1px solid #f1f5f9;
 }
 
 .welcome-icon {
-  width: 80px;
-  height: 80px;
-  background: linear-gradient(135deg, #dbeafe 0%, #e0e7ff 100%);
-  border-radius: 50%;
+  width: 72px;
+  height: 72px;
+  background: #f0fdfa;
+  border-radius: 20px;
   display: flex;
   align-items: center;
   justify-content: center;
-  margin-bottom: 20px;
+  margin: 0 auto 20px;
+  border: 1px solid #ccfbf1;
 }
 
 .welcome-title {
   font-size: 18px;
   font-weight: 600;
-  color: #1e293b;
+  color: #0f172a;
   margin: 0 0 8px 0;
 }
 
 .welcome-desc {
   font-size: 14px;
   color: #64748b;
-  margin: 0 0 24px 0;
+  margin: 0;
+  line-height: 1.5;
 }
 
 .quick-questions {
-  width: 100%;
+  padding: 8px 4px;
 }
 
-.quick-title {
+.quick-label {
   font-size: 13px;
   color: #94a3b8;
   margin-bottom: 12px;
+  font-weight: 500;
 }
 
-.quick-tags {
+.quick-chips {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  justify-content: center;
 }
 
-.quick-tag {
+.quick-chip {
+  padding: 8px 14px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 20px;
+  font-size: 13px;
+  color: #475569;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: all 0.2s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: inherit;
 }
 
-.quick-tag:hover {
+.chip-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #cbd5e1;
+  transition: all 0.2s ease;
+}
+
+.quick-chip:hover {
+  background: #0d9488;
+  border-color: #0d9488;
+  color: #ffffff;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(13, 148, 136, 0.25);
+}
+
+.quick-chip:hover .chip-dot {
+  background: rgba(255, 255, 255, 0.8);
+}
+
+/* 交替颜色 */
+.quick-chip.chip-1:hover {
   background: #3b82f6;
-  color: white;
+  border-color: #3b82f6;
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.25);
+}
+
+.quick-chip.chip-2:hover {
+  background: #f59e0b;
+  border-color: #f59e0b;
+  box-shadow: 0 4px 12px rgba(245, 158, 11, 0.25);
+}
+
+.quick-chip.chip-3:hover {
+  background: #8b5cf6;
+  border-color: #8b5cf6;
+  box-shadow: 0 4px 12px rgba(139, 92, 246, 0.25);
+}
+
+.quick-chip.chip-4:hover {
+  background: #ec4899;
+  border-color: #ec4899;
+  box-shadow: 0 4px 12px rgba(236, 72, 153, 0.25);
 }
 
 /* 消息项 */
@@ -661,6 +840,18 @@ defineExpose({
   display: flex;
   gap: 12px;
   margin-bottom: 20px;
+  animation: message-in 0.3s ease;
+}
+
+@keyframes message-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .message-item.user {
@@ -672,23 +863,31 @@ defineExpose({
 }
 
 .user-avatar {
-  background: #3b82f6;
+  width: 36px;
+  height: 36px;
+  background: #e2e8f0;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #64748b;
 }
 
 .ai-avatar {
   width: 36px;
   height: 36px;
-  background: linear-gradient(135deg, #8b5cf6 0%, #3b82f6 100%);
-  border-radius: 50%;
+  background: #0d9488;
+  border-radius: 10px;
   display: flex;
   align-items: center;
   justify-content: center;
   color: white;
+  box-shadow: 0 2px 8px rgba(13, 148, 136, 0.25);
 }
 
 .message-content {
   flex: 1;
-  max-width: 75%;
+  max-width: 78%;
 }
 
 .message-item.user .message-content {
@@ -698,27 +897,32 @@ defineExpose({
 }
 
 .message-bubble {
-  padding: 12px 16px;
-  border-radius: 16px;
+  padding: 14px 18px;
+  border-radius: 18px;
   line-height: 1.6;
   word-wrap: break-word;
+  font-size: 14px;
 }
 
 .message-item.user .message-bubble {
-  background: #3b82f6;
+  background: #0d9488;
   color: white;
-  border-radius: 16px 16px 4px 16px;
+  border-radius: 18px 18px 4px 18px;
+  box-shadow: 0 2px 8px rgba(13, 148, 136, 0.25);
 }
 
 .message-item.assistant .message-bubble {
-  background: white;
-  color: #1e293b;
-  border-radius: 16px 16px 16px 4px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  background: #ffffff;
+  color: #0f172a;
+  border-radius: 18px 18px 18px 4px;
+  box-shadow: 
+    0 2px 8px rgba(0, 0, 0, 0.04),
+    0 1px 2px rgba(0, 0, 0, 0.02);
+  border: 1px solid #f1f5f9;
 }
 
 .loading-bubble {
-  padding: 16px 20px;
+  padding: 18px 22px;
 }
 
 .message-text {
@@ -728,14 +932,33 @@ defineExpose({
 .message-meta {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-top: 4px;
-  padding: 0 4px;
+  gap: 10px;
+  margin-top: 6px;
+  padding: 0 6px;
 }
 
 .message-time {
   font-size: 11px;
   color: #94a3b8;
+}
+
+.copy-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  font-size: 11px;
+  color: #94a3b8;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.copy-btn:hover {
+  background: #f1f5f9;
+  color: #64748b;
 }
 
 /* 打字指示器 */
@@ -746,8 +969,8 @@ defineExpose({
 }
 
 .typing-indicator span {
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
   background: #cbd5e1;
   border-radius: 50%;
   animation: typing 1.4s infinite ease-in-out both;
@@ -763,8 +986,8 @@ defineExpose({
 
 @keyframes typing {
   0%, 80%, 100% {
-    transform: scale(0);
-    opacity: 0.5;
+    transform: scale(0.6);
+    opacity: 0.4;
   }
   40% {
     transform: scale(1);
@@ -774,26 +997,118 @@ defineExpose({
 
 /* 输入区域 */
 .input-section {
-  padding: 16px 20px;
-  background: white;
-  border-top: 1px solid #e2e8f0;
+  padding: 16px 20px 20px;
+  background: #ffffff;
+  border-top: 1px solid #f1f5f9;
 }
 
 .input-wrapper {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 12px;
 }
 
-.input-actions {
+.input-box {
+  background: #f8fafc;
+  border-radius: 16px;
+  padding: 14px 18px;
+  border: 1px solid #e2e8f0;
+  transition: all 0.2s ease;
+}
+
+.input-box:focus-within {
+  background: #ffffff;
+  border-color: #99f6e4;
+  box-shadow: 0 0 0 3px rgba(153, 246, 228, 0.3);
+}
+
+.input-box textarea {
+  width: 100%;
+  border: none;
+  background: transparent;
+  resize: none;
+  font-size: 15px;
+  line-height: 1.6;
+  color: #0f172a;
+  outline: none;
+  font-family: inherit;
+  min-height: 44px;
+}
+
+.input-box textarea::placeholder {
+  color: #94a3b8;
+}
+
+.input-box textarea:disabled {
+  opacity: 0.6;
+}
+
+.input-toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
 }
 
 .input-hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-size: 12px;
   color: #94a3b8;
+}
+
+.send-btn {
+  height: 38px;
+  padding: 0 20px;
+  border-radius: 10px;
+  border: none;
+  background: #0d9488;
+  color: white;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  transition: all 0.2s ease;
+  box-shadow: 0 2px 8px rgba(13, 148, 136, 0.25);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.send-btn:hover:not(:disabled) {
+  background: #0f766e;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(13, 148, 136, 0.35);
+}
+
+.send-btn:disabled {
+  background: #cbd5e1;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.send-btn.loading {
+  background: #cbd5e1;
+  padding: 0 16px;
+}
+
+.send-text {
+  font-weight: 500;
+}
+
+.loading-spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: white;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 /* 滚动条样式 */
@@ -806,12 +1121,12 @@ defineExpose({
 }
 
 .messages-container::-webkit-scrollbar-thumb {
-  background: #cbd5e1;
+  background: #e2e8f0;
   border-radius: 3px;
 }
 
 .messages-container::-webkit-scrollbar-thumb:hover {
-  background: #94a3b8;
+  background: #cbd5e1;
 }
 
 /* 响应式设计 */
@@ -823,7 +1138,7 @@ defineExpose({
     left: 0;
     width: 100%;
     height: 80vh;
-    border-radius: 16px 16px 0 0;
+    border-radius: 20px 20px 0 0;
   }
   
   .chat-window.maximized {
