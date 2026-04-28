@@ -70,11 +70,10 @@ def format_file_size(size):
     """
     if size is None:
         return '-'
-    for unit in ['B', 'KB', 'MB', 'GB']:
-        if size < 1024:
+    for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+        if size < 1024 or unit == 'TB':
             return f"{size:.2f} {unit}"
         size /= 1024
-    return f"{size:.2f} TB"
 
 # ==================== 数据模型 ====================
 
