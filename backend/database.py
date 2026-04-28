@@ -56,7 +56,11 @@ def get_display_name(user, fallback_attr='username'):
     """
     if not user:
         return None
-    return user.full_name or getattr(user, fallback_attr, None)
+    # 优先使用 full_name，如果不存在则使用 fallback_attr
+    full_name = getattr(user, 'full_name', None)
+    if full_name:
+        return full_name
+    return getattr(user, fallback_attr, None)
 
 
 def format_file_size(size):
