@@ -1,13 +1,16 @@
 from flask import Flask, request, jsonify, send_from_directory, session
 from flask_cors import CORS
 from ultralytics import YOLO
-import os, time, cv2, json, glob, random, io
+import os
+import time
+import cv2
+import json
 import requests
 from datetime import datetime
 from pathlib import Path
 from functools import wraps
 from werkzeug.security import generate_password_hash, check_password_hash
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image
 from database import db, User, DetectionHistory, SystemSettings, OperationLog, CustomModel, TrainingTask, UserAIModel, Patient, Examination, AIConversation, PatientProfile, DoctorProfile, DoctorRegistration, MedicalRecord, Announcement, AnnouncementRead, DoctorPatientRelation, Message, init_db, migrate_from_json
 import torch
 import re

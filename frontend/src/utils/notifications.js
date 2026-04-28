@@ -1,60 +1,46 @@
 import { ElMessage, ElNotification } from 'element-plus'
 
 /**
- * 显示成功消息
- * @param {string} message - 消息内容
- * @param {number} duration - 显示时长(毫秒)
+ * 创建消息提示函数工厂
+ * @param {string} type - 消息类型: success/warning/info/error
+ * @returns {Function} 消息提示函数
  */
-export const showSuccess = (message, duration = 3000) => {
+const createMessage = (type) => (message, duration = 3000) => {
   ElMessage({
     message,
-    type: 'success',
+    type,
     duration,
     showClose: true
   })
 }
+
+/**
+ * 显示成功消息
+ * @param {string} message - 消息内容
+ * @param {number} duration - 显示时长(毫秒)
+ */
+export const showSuccess = createMessage('success')
 
 /**
  * 显示错误消息
  * @param {string} message - 消息内容
  * @param {number} duration - 显示时长(毫秒)
  */
-export const showError = (message, duration = 3000) => {
-  ElMessage({
-    message,
-    type: 'error',
-    duration,
-    showClose: true
-  })
-}
+export const showError = createMessage('error')
 
 /**
  * 显示警告消息
  * @param {string} message - 消息内容
  * @param {number} duration - 显示时长(毫秒)
  */
-export const showWarning = (message, duration = 3000) => {
-  ElMessage({
-    message,
-    type: 'warning',
-    duration,
-    showClose: true
-  })
-}
+export const showWarning = createMessage('warning')
 
 /**
  * 显示信息消息
  * @param {string} message - 消息内容
  * @param {number} duration - 显示时长(毫秒)
  */
-export const showInfo = (message, duration = 3000) => {
-  ElMessage({
-    message,
-    type: 'info',
-    duration,
-    showClose: true
-  })
-}
+export const showInfo = createMessage('info')
 
 /**
  * 显示通知

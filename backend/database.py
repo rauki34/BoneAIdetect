@@ -25,6 +25,57 @@ def to_local_time(dt):
     local_time = dt + timedelta(hours=8)
     return local_time.isoformat()
 
+
+def safe_json_loads(value, default=None):
+    """安全解析JSON字符串
+    
+    Args:
+        value: 要解析的JSON字符串
+        default: 解析失败时的默认值
+        
+    Returns:
+        解析后的Python对象或默认值
+    """
+    if not value:
+        return default
+    try:
+        return json.loads(value)
+    except (json.JSONDecodeError, TypeError):
+        return default
+
+
+def get_display_name(user, fallback_attr='username'):
+    """获取用户显示名称
+    
+    Args:
+        user: 用户对象
+        fallback_attr: 备用属性名
+        
+    Returns:
+        用户全名或用户名，如果用户不存在则返回None
+    """
+    if not user:
+        return None
+    return user.full_name or getattr(user, fallback_attr, None)
+
+
+def format_file_size(size):
+    """格式化文件大小
+    
+    Args:
+        size: 文件大小（字节）
+        
+    Returns:
+        格式化后的文件大小字符串
+    """
+    if size is None:
+        return '-'
+    for unit in ['B', 'KB', 'MB', 'GB']:
+        if size < 1024:
+            return f"{size:.2f} {unit}"
+        size /= 1024
+    return f"{size:.2f} TB"
+
 # ==================== 数据模型 ====================
 
 class User(db.Model):
@@ -80,15 +131,8 @@ class DetectionHistory(db.Model):
     patient = db.relationship('User', foreign_keys=[patient_id], backref='medical_reports')
     
     def to_dict(self):
-        try:
-            detections = json.loads(self.detections) if self.detections else []
-        except:
-            detections = []
-        
-        try:
-            medical_advice = json.loads(self.medical_advice) if self.medical_advice else None
-        except:
-            medical_advice = self.medical_advice
+        detections = safe_json_loads(self.detections, [])
+        medical_advice = safe_json_loads(self.medical_advice, None)
         
         # 提取骨折类型信息
         fracture_types = []
@@ -97,13 +141,8 @@ class DetectionHistory(db.Model):
                 fracture_types.append(det['class'])
         
         # 获取医生和患者信息
-        doctor_name = None
-        if self.doctor:
-            doctor_name = self.doctor.full_name or self.doctor.username
-        
-        patient_name = None
-        if self.patient:
-            patient_name = self.patient.full_name or self.patient.username
+        doctor_name = get_display_name(self.doctor)
+        patient_name = get_display_name(self.patient)
         
         return {
             'id': self.id,
@@ -271,16 +310,10 @@ class Dataset(db.Model):
 
     def to_dict(self):
         # 格式化文件大小
-        size_str = self.format_file_size(self.file_size) if self.file_size else '-'
+        size_str = format_file_size(self.file_size)
 
         # 解析类别名称
-        class_list = []
-        if self.class_names:
-            try:
-                import json
-                class_list = json.loads(self.class_names)
-            except:
-                pass
+        class_list = safe_json_loads(self.class_names, [])
 
         return {
             'id': self.id,
@@ -299,17 +332,6 @@ class Dataset(db.Model):
             'created_at': to_local_time(self.created_at),
             'updated_at': to_local_time(self.updated_at)
         }
-
-    @staticmethod
-    def format_file_size(size):
-        """格式化文件大小"""
-        if size is None:
-            return '-'
-        for unit in ['B', 'KB', 'MB', 'GB']:
-            if size < 1024:
-                return f"{size:.2f} {unit}"
-            size /= 1024
-        return f"{size:.2f} TB"
 
     def __repr__(self):
         return f'<Dataset {self.name}>'
@@ -332,7 +354,7 @@ class FileRecord(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
 
     def to_dict(self):
-        size_str = self.format_file_size(self.file_size) if self.file_size else '-'
+        size_str = format_file_size(self.file_size)
         return {
             'id': self.id,
             'filename': self.filename,
@@ -346,16 +368,6 @@ class FileRecord(db.Model):
             'description': self.description,
             'created_at': to_local_time(self.created_at)
         }
-
-    @staticmethod
-    def format_file_size(size):
-        if size is None:
-            return '-'
-        for unit in ['B', 'KB', 'MB', 'GB']:
-            if size < 1024:
-                return f"{size:.2f} {unit}"
-            size /= 1024
-        return f"{size:.2f} TB"
 
 
 class CustomModel(db.Model):
@@ -510,15 +522,12 @@ class Examination(db.Model):
     patient = db.relationship('Patient', backref='examinations')
     
     def to_dict(self):
-        try:
-            detection_result = json.loads(self.detection_result) if self.detection_result else {}
-        except:
-            detection_result = {}
+        detection_result = safe_json_loads(self.detection_result, {})
         
         return {
             'id': self.id,
             'patient_id': self.patient_id,
-            'patient_name': self.patient.name if self.patient else None,
+            'patient_name': get_display_name(self.patient, 'name'),
             'exam_date': to_local_time(self.exam_date),
             'image_path': self.image_path,
             'detection_result': detection_result,
@@ -758,18 +767,15 @@ class MedicalRecord(db.Model):
     doctor = db.relationship('User', foreign_keys=[doctor_id], backref='created_records')
     
     def to_dict(self):
-        try:
-            prescription = json.loads(self.prescription) if self.prescription else {}
-        except:
-            prescription = {}
+        prescription = safe_json_loads(self.prescription, {})
         
         return {
             'id': self.id,
             'record_number': self.record_number,
             'patient_id': self.patient_id,
-            'patient_name': self.patient.full_name if self.patient else None,
+            'patient_name': get_display_name(self.patient),
             'doctor_id': self.doctor_id,
-            'doctor_name': self.doctor.full_name if self.doctor else None,
+            'doctor_name': get_display_name(self.doctor),
             'diagnosis': self.diagnosis,
             'symptoms': self.symptoms,
             'treatment': self.treatment,
