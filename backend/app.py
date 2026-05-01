@@ -3113,7 +3113,7 @@ def train_model():
         'yolo11n': 'YOLO11n',
         'yolo11s': 'YOLO11s',
         'yolo11m': 'YOLO11m',
-        'yolo26': 'YOLOv5'
+        'yolo26n': 'YOLO26n'
     }
     
     # 构建基础模型描述
