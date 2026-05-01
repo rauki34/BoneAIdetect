@@ -3605,7 +3605,7 @@ def delete_model(model_id):
             # 这是数据集管理中的数据集，不删除
             deleted_items.append(f"保留数据集: {dataset_dir_name}（来自数据集管理）")
     
-    # 4. 删除训练运行目录 (runs/train/model_key)
+    # 4. 删除训练运行目录 (uploads/training_runs/model_key)
     train_run_dir = os.path.join(UPLOADS, 'training_runs', model.model_key)
     if os.path.exists(train_run_dir):
         try:
@@ -3614,7 +3614,17 @@ def delete_model(model_id):
         except Exception as e:
             errors.append(f"删除训练记录失败: {e}")
     
-    # 5. 删除数据库记录
+    # 5. 删除关联的训练任务记录
+    try:
+        training_tasks = TrainingTask.query.filter_by(model_id=model_id).all()
+        for task in training_tasks:
+            db.session.delete(task)
+        if training_tasks:
+            deleted_items.append(f"训练任务记录: {len(training_tasks)}条")
+    except Exception as e:
+        errors.append(f"删除训练任务记录失败: {e}")
+    
+    # 6. 删除数据库记录
     db.session.delete(model)
     db.session.commit()
     deleted_items.append("数据库记录")
@@ -3629,6 +3639,49 @@ def delete_model(model_id):
     }
     if errors:
         result["warnings"] = errors
+    
+    return jsonify(result)
+
+
+@app.route("/api/models/cleanup-orphaned", methods=["POST"])
+@require_role('admin')
+def cleanup_orphaned_training_runs():
+    """清理孤立的训练记录目录（模型已删除但训练记录仍存在）"""
+    training_runs_dir = os.path.join(UPLOADS, 'training_runs')
+    if not os.path.exists(training_runs_dir):
+        return jsonify({"success": True, "message": "训练记录目录不存在", "cleaned": []})
+    
+    # 获取所有有效的 model_key
+    valid_model_keys = {m.model_key for m in CustomModel.query.all()}
+    
+    cleaned = []
+    errors = []
+    
+    try:
+        for item in os.listdir(training_runs_dir):
+            item_path = os.path.join(training_runs_dir, item)
+            # 检查是否是目录且符合训练记录命名格式
+            if os.path.isdir(item_path) and item.startswith('custom_'):
+                if item not in valid_model_keys:
+                    # 这是一个孤立的训练记录目录
+                    try:
+                        shutil.rmtree(item_path)
+                        cleaned.append(item)
+                    except Exception as e:
+                        errors.append(f"删除 {item} 失败: {e}")
+    except Exception as e:
+        return jsonify({"success": False, "error": f"清理失败: {e}"}), 500
+    
+    result = {
+        "success": True,
+        "message": f"清理完成，删除了 {len(cleaned)} 个孤立训练记录目录",
+        "cleaned": cleaned
+    }
+    if errors:
+        result["errors"] = errors
+    
+    # 记录操作
+    log_operation(f"清理孤立训练记录: {len(cleaned)}个")
     
     return jsonify(result)
 
