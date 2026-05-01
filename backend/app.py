@@ -10,176 +10,10 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from PIL import Image, ImageDraw, ImageFont
 from database import db, User, DetectionHistory, SystemSettings, OperationLog, CustomModel, TrainingTask, UserAIModel, Patient, Examination, AIConversation, PatientProfile, DoctorProfile, DoctorRegistration, MedicalRecord, Announcement, AnnouncementRead, DoctorPatientRelation, Message, init_db, migrate_from_json
 import torch
-import torch.nn as nn
-import math
 import re
 from collections import defaultdict
 from threading import Lock
 from sqlalchemy import func
-
-
-# ==================== ECA注意力机制模块 ====================
-class ECA(nn.Module):
-    """
-    Efficient Channel Attention 模块
-    通过一维卷积捕获通道间的依赖关系，参数量极少但效果显著
-    """
-    def __init__(self, channel: int, gamma: float = 2, b: float = 1):
-        super(ECA, self).__init__()
-        # 自适应计算内核大小: kernel_size = |log2(C) / gamma + b / gamma|
-        kernel_size = int(abs((math.log(channel, 2) + b) / gamma))
-        kernel_size = kernel_size if kernel_size % 2 else kernel_size + 1
-        
-        self.avg_pool = nn.AdaptiveAvgPool2d(1)
-        self.conv = nn.Conv1d(1, 1, kernel_size=kernel_size, padding=(kernel_size - 1) // 2, bias=False)
-        self.sigmoid = nn.Sigmoid()
-        self.channel = channel
-        self.kernel_size = kernel_size
-        
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # 全局平均池化
-        y = self.avg_pool(x)
-        # 调整维度用于1D卷积
-        y = y.squeeze(-1).transpose(-1, -2)
-        # 1D卷积捕获通道间关系
-        y = self.conv(y)
-        # 恢复维度
-        y = y.transpose(-1, -2).unsqueeze(-1)
-        # Sigmoid激活
-        y = self.sigmoid(y)
-        # 通道加权
-        return x * y.expand_as(x)
-
-
-def insert_eca_to_model(model, positions=None):
-    """
-    在YOLO模型中插入ECA模块
-    
-    Args:
-        model: YOLO模型
-        positions: 插入位置列表，默认插入到所有C3/C2f模块（排除检测头）
-        
-    Returns:
-        修改的层数
-    """
-    from ultralytics.nn.modules import C3, C2f
-    
-    # YOLOv8/YOLO11的模型结构使用 model.0, model.1 等数字索引
-    # 不再使用 backbone/neck 命名，而是直接匹配所有C3/C2f模块（排除检测头）
-    if positions is None:
-        positions = ['all_c3_c2f']  # 特殊标记，表示插入到所有C3/C2f
-    
-    modified_count = 0
-    modified_layers = []  # 记录修改的层名
-    model_module = model.model
-    
-    print(f"[ECA] 开始扫描模型结构，查找可插入ECA的位置...")
-    print(f"[ECA] 目标: 所有C3/C2f模块（排除检测头）")
-    
-    # 首先扫描所有模块，查看模型结构
-    all_modules = list(model_module.named_modules())
-    print(f"[ECA] 模型总模块数: {len(all_modules)}")
-    
-    # 查找所有C3/C2f模块
-    c3_c2f_modules = [(name, type(m).__name__) for name, m in all_modules if isinstance(m, (C3, C2f))]
-    print(f"[ECA] 找到 {len(c3_c2f_modules)} 个C3/C2f模块")
-    
-    # 显示前10个模块名称（用于调试）
-    print(f"[ECA] 模型结构预览（前10个模块）:")
-    for i, (name, mtype) in enumerate(c3_c2f_modules[:10]):
-        print(f"  - {name}: {mtype}")
-    if len(c3_c2f_modules) > 10:
-        print(f"  ... 还有 {len(c3_c2f_modules) - 10} 个模块")
-    
-    for name, module in all_modules:
-        name_lower = name.lower()
-        
-        # 检查模块类型 - 只处理C3/C2f模块
-        is_c3_c2f = isinstance(module, (C3, C2f))
-        if not is_c3_c2f:
-            continue
-        
-        # 排除检测头部分（包含cv2, cv3的Detect/Segment/Pose层）
-        # YOLOv8/YOLO11的检测头通常包含 'cv2', 'cv3', 'detect', 'head' 等关键字
-        if any(skip in name_lower for skip in ['head', 'detect', 'seg', 'pose', 'cv2', 'cv3']):
-            continue
-        
-        # 如果是特定位置模式，检查是否匹配
-        should_modify = False
-        if 'all_c3_c2f' in positions:
-            should_modify = True
-        else:
-            # 兼容旧的位置参数
-            should_modify = any(pos in name_lower for pos in positions)
-        
-        if should_modify:
-            # 获取输出通道数
-            out_channels = None
-            if hasattr(module, 'cv3'):
-                try:
-                    out_channels = module.cv3.conv.out_channels
-                except:
-                    pass
-            elif hasattr(module, 'cv2'):
-                try:
-                    out_channels = module.cv2.conv.out_channels
-                except:
-                    pass
-            
-            if out_channels is None:
-                print(f"[ECA] ⚠ 跳过 {name}: 无法获取输出通道数")
-                continue
-            
-            parent_name = '.'.join(name.split('.')[:-1])
-            child_name = name.split('.')[-1]
-            
-            try:
-                parent = model_module
-                for part in parent_name.split('.'):
-                    if part:
-                        parent = getattr(parent, part)
-                
-                # 检查是否已经被ECA包装过（避免重复插入）
-                if hasattr(module, 'eca'):
-                    print(f"[ECA] ⚠ 跳过 {name}: 已经包含ECA模块")
-                    continue
-                
-                # 创建带ECA的包装模块
-                class ModuleWithECA(nn.Module):
-                    def __init__(self, original_module, channels):
-                        super().__init__()
-                        self.original = original_module
-                        self.eca = ECA(channels)
-                    
-                    def forward(self, x):
-                        x = self.original(x)
-                        return self.eca(x)
-                
-                wrapped = ModuleWithECA(module, out_channels)
-                setattr(parent, child_name, wrapped)
-                modified_count += 1
-                modified_layers.append(f"{name} (channels={out_channels})")
-                
-                # 打印前5个插入的层
-                if modified_count <= 5:
-                    print(f"[ECA] ✓ 插入到层: {name} (channels={out_channels})")
-                elif modified_count == 6:
-                    print(f"[ECA] ... 还有更多信息，共找到 {modified_count}+ 个可插入位置")
-                    
-            except Exception as e:
-                print(f"[ECA] ✗ 修改模块 {name} 时出错: {e}")
-                import traceback
-                traceback.print_exc()
-    
-    if modified_count > 0:
-        print(f"[ECA] 扫描完成，共插入 {modified_count} 个ECA模块")
-    else:
-        print(f"[ECA] ⚠ 警告: 未找到可插入ECA的位置")
-        print(f"[ECA] 调试信息: 已扫描 {len(all_modules)} 个模块，找到 {len(c3_c2f_modules)} 个C3/C2f模块")
-        print(f"[ECA] 可能原因: 1) 模型结构不包含C3/C2f模块 2) 已经是ECA增强模型 3) 模型结构特殊")
-    
-    return modified_count
-# ==================== ECA模块结束 ====================
 
 # 内存存储验证码: {captcha_id: {'code': 'ABC1', 'expire_time': timestamp}}
 captcha_store = {}
@@ -3149,9 +2983,8 @@ def train_model():
         img_size = int(request.form.get('img_size', 640))
         dataset_source = request.form.get('dataset_source', 'upload')
         use_best_hyperparams = request.form.get('use_best_hyperparams', 'false').lower() == 'true'
-        use_eca = request.form.get('use_eca', 'false').lower() == 'true'  # 是否使用ECA注意力机制
         
-        print(f"[DEBUG] 训练请求参数: name={model_name}, base_model={base_model}, dataset_source={dataset_source}, use_eca={use_eca}")
+        print(f"[DEBUG] 训练请求参数: name={model_name}, base_model={base_model}, dataset_source={dataset_source}")
         print(f"[DEBUG] Form data: {dict(request.form)}")
         print(f"[DEBUG] Files: {list(request.files.keys())}")
     except Exception as e:
@@ -3280,7 +3113,7 @@ def train_model():
         'yolo11n': 'YOLO11n',
         'yolo11s': 'YOLO11s',
         'yolo11m': 'YOLO11m',
-        'yolo26n': 'YOLO26n'
+        'yolo26': 'YOLOv5'
     }
     
     # 构建基础模型描述
@@ -3297,12 +3130,11 @@ def train_model():
         dataset_name = dataset.name
     
     # 构建增强描述
-    eca_info = " [ECA注意力增强]" if use_eca else ""
-    model_info = f"\n\n基于 {base_model_display}{eca_info} 模型使用 {dataset_name} 训练集训练"
+    model_info = f"\n\n基于 {base_model_display} 模型使用 {dataset_name} 训练集训练"
     if enhanced_description:
         enhanced_description += model_info
     else:
-        enhanced_description = f"基于 {base_model_display}{eca_info} 模型使用 {dataset_name} 训练集训练"
+        enhanced_description = f"基于 {base_model_display} 模型使用 {dataset_name} 训练集训练"
 
     # 创建模型记录
     model_path = os.path.join(MODELS_DIR, f'{model_key}.pt')
@@ -3344,7 +3176,7 @@ def train_model():
     thread = threading.Thread(
         target=train_model_task,
         args=(task.id, custom_model.id, base_model_path, dataset_dir, epochs, batch_size, img_size,
-              is_continued_training, use_best_hyperparams, use_eca)
+              is_continued_training, use_best_hyperparams)
     )
     thread.daemon = True
     thread.start()
@@ -3360,7 +3192,7 @@ def train_model():
 
 
 def train_model_task(task_id, model_id, base_model_path, dataset_dir, epochs, batch_size, img_size,
-                     is_continued_training=False, use_best_hyperparams=False, use_eca=False):
+                     is_continued_training=False, use_best_hyperparams=False):
     """异步训练模型任务"""
     with app.app_context():
         try:
@@ -3394,35 +3226,6 @@ def train_model_task(task_id, model_id, base_model_path, dataset_dir, epochs, ba
                 else:
                     print(f"⚠ 本地模型不存在，尝试从Ultralytics下载: {base_model_path}")
                     model = YOLO(base_model_path)
-            
-            # 如果启用ECA注意力机制，插入ECA模块
-            if use_eca:
-                print(f"\n{'='*80}")
-                print("🔥 [ECA] 启用ECA注意力机制优化")
-                print(f"{'='*80}")
-                
-                # 记录插入前的参数量
-                params_before = sum(p.numel() for p in model.parameters())
-                print(f"[ECA] 插入前模型参数量: {params_before:,}")
-                
-                # 插入ECA模块
-                modified_count = insert_eca_to_model(model)
-                
-                # 记录插入后的参数量
-                params_after = sum(p.numel() for p in model.parameters())
-                params_increase = params_after - params_before
-                params_increase_ratio = (params_increase / params_before) * 100 if params_before > 0 else 0
-                
-                print(f"[ECA] ✓ 成功插入 {modified_count} 个ECA模块")
-                print(f"[ECA] 插入后模型参数量: {params_after:,}")
-                print(f"[ECA] 参数量增加: {params_increase:,} ({params_increase_ratio:.4f}%)")
-                
-                if modified_count > 0:
-                    print(f"[ECA] ✓✓✓ ECA注意力机制启用成功！")
-                else:
-                    print(f"[ECA] ⚠ 警告: 未插入任何ECA模块，请检查模型结构")
-                
-                print(f"{'='*80}\n")
 
             # 查找数据集配置文件
             data_yaml = None
@@ -3454,13 +3257,6 @@ def train_model_task(task_id, model_id, base_model_path, dataset_dir, epochs, ba
             print(f"数据集: {data_yaml}")
             print(f"训练配置: epochs={epochs}, batch={batch_size}, img_size={img_size}")
             print(f"使用最佳超参数: {use_best_hyperparams}")
-            
-            # ECA状态高亮显示
-            if use_eca:
-                print(f"🔥 ECA注意力机制: ✅ 已启用 (插入了ECA模块)")
-            else:
-                print(f"ECA注意力机制: ❌ 未启用")
-            
             print(f"{'='*80}\n")
 
             # 1. 动态准备核心参数
@@ -3629,10 +3425,6 @@ def train_model_task(task_id, model_id, base_model_path, dataset_dir, epochs, ba
             print(f"\n{'='*80}")
             print(f"✅ 模型训练完成!")
             print(f"模型名称: {custom_model.name}")
-            if use_eca:
-                print(f"🔥 ECA注意力增强: ✅ 已启用 (训练时使用了ECA优化)")
-            else:
-                print(f"ECA注意力增强: ❌ 未启用")
             print(f"训练轮数: {epochs}")
             print(f"性能指标:")
             print(f"  mAP@0.5: {custom_model.map50:.4f}")
