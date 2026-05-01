@@ -27,14 +27,6 @@ instance.interceptors.response.use(
     return response
   },
   error => {
-    if (error.response?.status === 401) {
-      // 未授权，清除登录信息并跳转到登录页
-      localStorage.removeItem('token')
-      localStorage.removeItem('username')
-      localStorage.removeItem('userRole')
-      // 使用 replace 并强制刷新，确保状态完全重置
-      window.location.replace('/login?t=' + Date.now())
-    }
     return Promise.reject(error)
   }
 )
