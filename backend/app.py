@@ -3156,13 +3156,18 @@ def train_model():
     db.session.commit()
 
     # 创建训练任务
+    # 设置日志文件路径
+    log_file_path = os.path.join(UPLOADS, 'training_logs', f'task_{custom_model.model_key}.log')
+    os.makedirs(os.path.dirname(log_file_path), exist_ok=True)
+    
     task = TrainingTask(
         task_name=f"训练 {model_name}",
         model_id=custom_model.id,
         status='running',
         total_epochs=epochs,
         created_by=username,
-        started_at=datetime.utcnow()
+        started_at=datetime.utcnow(),
+        log_file=log_file_path
     )
     db.session.add(task)
     db.session.commit()
@@ -3191,19 +3196,46 @@ def train_model():
     })
 
 
+class Logger:
+    """日志记录器，同时输出到控制台和文件"""
+    def __init__(self, log_file):
+        self.log_file = log_file
+        self.terminal = sys.stdout
+        self.log = open(log_file, 'w', encoding='utf-8')
+        
+    def write(self, message):
+        self.terminal.write(message)
+        self.log.write(message)
+        self.log.flush()
+        
+    def flush(self):
+        self.terminal.flush()
+        self.log.flush()
+        
+    def close(self):
+        self.log.close()
+
+
 def train_model_task(task_id, model_id, base_model_path, dataset_dir, epochs, batch_size, img_size,
                      is_continued_training=False, use_best_hyperparams=False):
     """异步训练模型任务"""
     with app.app_context():
+        task = db.session.get(TrainingTask, task_id)
+        custom_model = db.session.get(CustomModel, model_id)
+        
+        if not task or not custom_model:
+            return
+        
+        # 设置日志记录
+        logger = None
+        if task.log_file:
+            os.makedirs(os.path.dirname(task.log_file), exist_ok=True)
+            logger = Logger(task.log_file)
+            sys.stdout = logger
+        
         try:
             from ultralytics import YOLO
             import time
-            
-            task = db.session.get(TrainingTask, task_id)
-            custom_model = db.session.get(CustomModel, model_id)
-            
-            if not task or not custom_model:
-                return
             
             # 加载基础模型
             if is_continued_training:
@@ -3454,6 +3486,12 @@ def train_model_task(task_id, model_id, base_model_path, dataset_dir, epochs, ba
                 custom_model.status = 'failed'
             
             db.session.commit()
+        
+        finally:
+            # 恢复标准输出并关闭日志文件
+            if logger:
+                sys.stdout = logger.terminal
+                logger.close()
 
 
 @app.route("/api/training/tasks/<int:task_id>/progress", methods=["GET"])
@@ -3712,18 +3750,38 @@ def get_training_task(task_id):
 def get_training_logs(task_id):
     """获取训练日志"""
     task = db.session.get(TrainingTask, task_id)
-    if not task or not task.log_file:
+    if not task:
         return jsonify({"logs": ""})
-
-    try:
-        if os.path.exists(task.log_file):
+    
+    # 首先尝试从log_file读取
+    if task.log_file and os.path.exists(task.log_file):
+        try:
             with open(task.log_file, 'r', encoding='utf-8') as f:
                 logs = f.read()
             return jsonify({"logs": logs})
-        else:
-            return jsonify({"logs": ""})
-    except Exception as e:
-        return jsonify({"logs": f"读取日志失败: {str(e)}"})
+        except Exception as e:
+            return jsonify({"logs": f"读取日志失败: {str(e)}"})
+    
+    # 如果没有log_file或文件不存在，尝试从训练运行目录读取
+    if task.model:
+        train_run_dir = os.path.join(UPLOADS, 'training_runs', task.model.model_key)
+        if os.path.exists(train_run_dir):
+            # 尝试读取训练目录中的日志文件
+            possible_logs = [
+                os.path.join(train_run_dir, 'training.log'),
+                os.path.join(train_run_dir, 'train.log'),
+                os.path.join(train_run_dir, 'results.csv'),
+            ]
+            for log_path in possible_logs:
+                if os.path.exists(log_path):
+                    try:
+                        with open(log_path, 'r', encoding='utf-8') as f:
+                            logs = f.read()
+                        return jsonify({"logs": logs})
+                    except:
+                        continue
+    
+    return jsonify({"logs": "暂无日志"})
 
 
 @app.route("/api/training/tasks/<int:task_id>/stop", methods=["POST"])
