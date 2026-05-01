@@ -945,6 +945,18 @@
                 <el-checkbox v-model="trainingForm.use_best_hyperparams">使用推荐超参数</el-checkbox>
               </el-form-item>
               
+              <!-- ECA注意力机制开关 -->
+              <el-form-item>
+                <el-checkbox v-model="trainingForm.use_eca">
+                  <span style="display: flex; align-items: center; gap: 4px;">
+                    启用ECA注意力机制
+                    <el-tooltip content="ECA (Efficient Channel Attention) 是一种轻量级通道注意力机制，参数量仅增加约0.03%，可提升检测精度 2-4%">
+                      <el-icon><Info-Filled /></el-icon>
+                    </el-tooltip>
+                  </span>
+                </el-checkbox>
+              </el-form-item>
+              
               <el-form-item>
                 <el-button 
                   type="primary" 
@@ -1128,6 +1140,12 @@
                 <el-descriptions-item label="模型名称">{{ selectedModel.name }}</el-descriptions-item>
                 <el-descriptions-item label="模型描述">{{ selectedModel.description || '无描述' }}</el-descriptions-item>
                 <el-descriptions-item label="基础模型">{{ selectedModel.base_model }}</el-descriptions-item>
+                <el-descriptions-item label="优化技术" v-if="selectedModel.description?.includes('ECA')">
+                  <el-tag type="success" effect="dark" size="small">
+                    <el-icon><Circle-Check /></el-icon>
+                    ECA注意力增强
+                  </el-tag>
+                </el-descriptions-item>
                 <el-descriptions-item label="类型">
                   <el-tag :type="selectedModel.type === 'system' ? 'info' : 'success'">
                     {{ selectedModel.type === 'system' ? '系统模型' : '自定义模型' }}
@@ -1921,7 +1939,7 @@
 import { ref, reactive, onMounted, computed, watch, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Setting, DocumentChecked, FirstAidKit, User, Camera, Picture, VideoCamera, MagicStick, TrendCharts, DataAnalysis, Document, Monitor, Collection, Search, Calendar, Bell, Plus, Edit, Delete, View, Upload, VideoPlay, Refresh, Folder, UploadFilled, ArrowLeft } from '@element-plus/icons-vue'
+import { Setting, DocumentChecked, FirstAidKit, User, Camera, Picture, VideoCamera, MagicStick, TrendCharts, DataAnalysis, Document, Monitor, Collection, Search, Calendar, Bell, Plus, Edit, Delete, View, Upload, VideoPlay, Refresh, Folder, UploadFilled, ArrowLeft, InfoFilled, CircleCheck } from '@element-plus/icons-vue'
 import axios from '../utils/axios'
 import * as echarts from 'echarts'
 import Detection from './Detection.vue'
@@ -2131,7 +2149,8 @@ const trainingForm = reactive({
   img_size: 640,
   dataset: null,
   dataset_id: null,
-  use_best_hyperparams: false
+  use_best_hyperparams: false,
+  use_eca: false  // 是否启用ECA注意力机制
 })
 
 // 计算属性
@@ -2865,6 +2884,7 @@ const startTraining = async () => {
     formData.append('img_size', trainingForm.img_size)
     formData.append('dataset_source', datasetSource.value)
     formData.append('use_best_hyperparams', trainingForm.use_best_hyperparams.toString())
+    formData.append('use_eca', trainingForm.use_eca ? 'true' : 'false')
 
     if (datasetSource.value === 'existing') {
       formData.append('dataset_id', String(trainingForm.dataset_id))
@@ -2900,6 +2920,7 @@ const resetTrainingForm = () => {
   trainingForm.img_size = 640
   trainingForm.dataset = null
   trainingForm.dataset_id = null
+  trainingForm.use_eca = false
   datasetSource.value = 'existing'
   if (uploadRef.value) {
     uploadRef.value.clearFiles()
