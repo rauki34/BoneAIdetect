@@ -3275,10 +3275,6 @@ def train_model_task(task_id, model_id, base_model_path, dataset_dir, epochs, ba
                 'plots': True,
                 'save': True,
                 'workers': 4,       
-                'cache': False,     # 关闭磁盘缓存，减少内存占用
-                'box': 10.0,        # 增加定位损失权重（默认7.5）
-                'dfl': 2.0,         # 增加分布焦点损失（默认1.5）
-                'iou': 0.25,        # 降低IoU阈值，让模型更关注精确定位
             }
 
             # 2. 优化超参数加载逻辑 (使用 update 批量覆盖)
