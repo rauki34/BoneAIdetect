@@ -7,6 +7,15 @@ import Detection from "../views/Detection.vue"
 import VideoStreamDetection from "../views/VideoStreamDetection.vue"
 import CameraDetection from "../views/CameraDetection.vue"
 
+// 修复 Edge 最小化自动弹回
+const originalReplaceState = history.replaceState;
+history.replaceState = function (...args) {
+  if (document.visibilityState === 'hidden') {
+    return;
+  }
+  originalReplaceState.apply(this, args);
+};
+
 const router = createRouter({
   history: createWebHistory(),
   routes: [
