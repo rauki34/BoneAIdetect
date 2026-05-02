@@ -3306,7 +3306,8 @@ def train_model_task(task_id, model_id, base_model_path, dataset_dir, epochs, ba
                 'verbose': False,
                 'plots': True,
                 'save': True,
-                'workers': 4,       
+                'workers': 4, 
+                'optimizer':'SGD'      
             }
 
             # 2. 优化超参数加载逻辑 (使用 update 批量覆盖)

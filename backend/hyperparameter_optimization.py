@@ -5,6 +5,7 @@
 import os
 import sys
 import time
+from datetime import datetime
 import optuna
 from ultralytics import YOLO
 import torch
@@ -192,9 +193,11 @@ if __name__ == "__main__":
     
     best_params = optimizer.optimize()
     
-    # 保存最佳参数
+    # 保存最佳参数，文件名带日期时间戳
     import json
-    with open(os.path.join(args.output, 'best_hyperparams.json'), 'w') as f:
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    filename = f'best_hyperparams_{timestamp}.json'
+    with open(os.path.join(args.output, filename), 'w') as f:
         json.dump(best_params, f, indent=2)
     
-    print(f"最佳参数已保存到: {os.path.join(args.output, 'best_hyperparams.json')}")
+    print(f"最佳参数已保存到: {os.path.join(args.output, filename)}")
