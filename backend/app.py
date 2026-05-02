@@ -3620,12 +3620,17 @@ def delete_model(model_id):
         deleted_items.append("内存中的模型")
     
     # 2. 删除模型文件 (.pt)
-    if model.model_path and os.path.exists(model.model_path):
-        try:
-            os.remove(model.model_path)
-            deleted_items.append(f"模型文件: {os.path.basename(model.model_path)}")
-        except Exception as e:
-            errors.append(f"删除模型文件失败: {e}")
+    if model.model_path:
+        if os.path.exists(model.model_path):
+            try:
+                os.remove(model.model_path)
+                deleted_items.append(f"模型文件: {os.path.basename(model.model_path)}")
+            except Exception as e:
+                errors.append(f"删除模型文件失败: {e}")
+        else:
+            deleted_items.append(f"模型文件不存在，跳过: {os.path.basename(model.model_path)}")
+    else:
+        errors.append("模型路径为空，无法删除模型文件")
     
     # 3. 删除数据集目录（仅删除训练时上传的数据集，不删除数据集管理中的数据集）
     # 训练时上传的数据集路径包含 'custom_' 前缀，如：uploads/datasets/custom_yolov8_123456/
@@ -3653,7 +3658,16 @@ def delete_model(model_id):
         except Exception as e:
             errors.append(f"删除训练记录失败: {e}")
     
-    # 5. 删除关联的训练任务记录
+    # 5. 删除训练日志文件 (uploads/training_logs/task_{model_key}.log)
+    log_file_path = os.path.join(UPLOADS, 'training_logs', f'task_{model.model_key}.log')
+    if os.path.exists(log_file_path):
+        try:
+            os.remove(log_file_path)
+            deleted_items.append(f"训练日志: task_{model.model_key}.log")
+        except Exception as e:
+            errors.append(f"删除训练日志失败: {e}")
+    
+    # 6. 删除关联的训练任务记录
     try:
         training_tasks = TrainingTask.query.filter_by(model_id=model_id).all()
         for task in training_tasks:
