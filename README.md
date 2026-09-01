@@ -1,3 +1,7 @@
+# Notice!!!
+This project has rebuilt and uploaded on other repository as follows:
+https://gitee.com/ljn0930/smart-bone-cloud
+
 # 智慧骨科云平台
 
 基于深度学习的医学影像骨折智能检测系统，集成YOLO目标检测、AI辅助诊断、患者管理、病历管理等功能，为骨科医生提供全流程诊疗支持。
