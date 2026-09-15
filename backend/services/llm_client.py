@@ -296,9 +296,34 @@ class LocalProvider(BaseProvider):
     default_api_url = 'http://127.0.0.1:8000'
 
     def _build_request(self, messages, max_tokens, temperature, stream):
-        url = f'{self.api_url.rstrip("/")}/chat'
+        endpoint = '/chat/stream' if stream else '/chat'
+        url = f'{self.api_url.rstrip("/")}{endpoint}'
         payload = {'prompt': self._to_prompt(messages)}
         return url, {'Content-Type': 'application/json'}, payload
+
+    def _iter_stream(self, response):
+        """本地服务的 SSE 事件格式为 {"delta": "..."}
+
+        与 OpenAI 兼容格式（choices[0].delta.content）不同，需单独解析。
+        """
+        for raw in response.iter_lines():
+            if not raw:
+                continue
+            line = raw.decode('utf-8', errors='ignore').strip()
+            if not line.startswith('data:'):
+                continue
+            data = line[5:].strip()
+            if data == '[DONE]':
+                break
+            try:
+                obj = json.loads(data)
+            except json.JSONDecodeError:
+                continue
+            if obj.get('error'):
+                raise LLMResponseError(f'本地服务流式错误: {obj["error"]}')
+            chunk = obj.get('delta')
+            if chunk:
+                yield chunk
 
     @staticmethod
     def _to_prompt(messages):

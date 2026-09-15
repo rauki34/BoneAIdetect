@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, send_from_directory, session
+from flask import Flask, request, jsonify, send_from_directory, session, Response
 from flask_cors import CORS
 from ultralytics import YOLO
 import os, time, cv2, json, glob, random, io, sys
@@ -6135,6 +6135,103 @@ AI_SYSTEM_PROMPT = """你是一位专业的骨科医疗AI助手，专门为骨�
 - 回答控制在300字以内"""
 
 
+def _build_assistant_messages(user_id, session_id):
+    """拼装助手对话上下文（系统提示词 + 最近 10 条历史）"""
+    history = AIConversation.query.filter_by(
+        patient_id=user_id,
+        session_id=session_id
+    ).order_by(AIConversation.created_at.desc()).limit(10).all()
+
+    messages = [{"role": "system", "content": AI_SYSTEM_PROMPT}]
+    # 查询是倒序的，需反转回时间正序
+    for h in reversed(history):
+        role = "user" if h.message_type == "user" else "assistant"
+        messages.append({"role": role, "content": h.message_content})
+    return messages
+
+
+@app.route("/api/ai-assistant/chat/stream", methods=["POST"])
+@require_role('patient', 'doctor', 'admin')
+def ai_assistant_chat_stream():
+    """AI助手流式对话（SSE）
+
+    事件格式：
+        data: {"delta": "增量文本"}
+        data: {"error": "错误信息"}
+        data: [DONE]
+
+    注意：SSE 一旦开始发送就无法再更改 HTTP 状态码，
+    因此错误也以 200 + error 事件返回，由前端统一处理。
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({"success": False, "error": "请求数据为空"}), 400
+
+    session_id = data.get('session_id', '')
+    message = data.get('message', '').strip()
+    if not session_id:
+        return jsonify({"success": False, "error": "会话ID不能为空"}), 400
+    if not message:
+        return jsonify({"success": False, "error": "消息内容不能为空"}), 400
+
+    user = get_current_user()
+    user_id = user.id
+
+    # 用户消息先落库，保证即使流式中断也不丢失提问
+    db.session.add(AIConversation(
+        patient_id=user_id,
+        session_id=session_id,
+        message_type='user',
+        message_content=message,
+    ))
+    db.session.commit()
+
+    messages = _build_assistant_messages(user_id, session_id)
+
+    # 必须在视图内构造客户端：生成器在请求上下文之外执行，
+    # 此时 get_llm_client() 内部的数据库查询会抛
+    # "Working outside of application context"
+    client = get_llm_client()
+    # 超时口径与非流式接口一致：本地模型慢，用 Provider 默认值
+    timeout = None if client.provider_name == 'local' else 60
+
+    def generate():
+        collected = []
+        try:
+            for chunk in client.chat(messages, stream=True,
+                                     timeout=timeout, max_tokens=500):
+                collected.append(chunk)
+                yield f'data: {json.dumps({"delta": chunk}, ensure_ascii=False)}\n\n'
+        except LLMError as e:
+            logger.warning('流式对话失败: %s', e)
+            yield f'data: {json.dumps({"error": str(e)}, ensure_ascii=False)}\n\n'
+        except Exception as e:
+            logger.error('流式对话异常: %s', e, exc_info=True)
+            yield f'data: {json.dumps({"error": str(e)}, ensure_ascii=False)}\n\n'
+        finally:
+            # 合并完整回复落库，否则下轮对话拿不到上下文。
+            # 生成器在请求上下文之外执行，需自带 app context。
+            if collected:
+                try:
+                    with app.app_context():
+                        db.session.add(AIConversation(
+                            patient_id=user_id,
+                            session_id=session_id,
+                            message_type='assistant',
+                            message_content=''.join(collected),
+                        ))
+                        db.session.commit()
+                except Exception as e:
+                    logger.error('保存流式回复失败: %s', e, exc_info=True)
+            yield 'data: [DONE]\n\n'
+
+    return Response(
+        generate(),
+        mimetype='text/event-stream',
+        headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'},
+    )
+
+
 @app.route("/api/ai-assistant/chat", methods=["POST"])
 @require_role('patient', 'doctor', 'admin')
 def ai_assistant_chat():
@@ -6165,20 +6262,9 @@ def ai_assistant_chat():
         db.session.add(user_msg)
         db.session.commit()
         
-        # 获取历史对话上下文（最近10条）
-        history = AIConversation.query.filter_by(
-            patient_id=user.id,
-            session_id=session_id
-        ).order_by(AIConversation.created_at.desc()).limit(10).all()
-        
-        # 构建消息历史（使用OpenAI格式）
-        messages = [{"role": "system", "content": AI_SYSTEM_PROMPT}]
-        
-        # 按时间顺序添加历史消息
-        for h in reversed(history):
-            role = "user" if h.message_type == "user" else "assistant"
-            messages.append({"role": role, "content": h.message_content})
-        
+        # 构建消息历史（系统提示词 + 最近 10 条上下文）
+        messages = _build_assistant_messages(user.id, session_id)
+
         # 使用系统配置的AI服务
         reply = call_ai_assistant_api(messages)
         
