@@ -16,14 +16,17 @@ from pathlib import Path
 SRC = Path('backend/app.py')
 DRY_RUN = '--apply' not in sys.argv
 
+# 蓝图模块 -> 蓝图名（这些模块会把 @app.route 改写为 @bp.route）
+BLUEPRINTS = {
+    'backend/api/analysis.py': 'analysis',
+}
+
+# 蓝图模块中「路由函数名 -> 蓝图名」的映射在 PLAN 里由 BLUEPRINTS 推导
 # 目标模块 -> 待搬迁函数名
 PLAN = {
-    'backend/core/security.py': [
-        'filter_sensitive_content', 'detect_prompt_injection', 'sanitize_ai_input',
-    ],
-    'backend/core/ratelimit.py': ['check_rate_limit', 'rate_limit'],
-    'backend/core/auth.py': [
-        'get_current_user', 'require_auth', 'require_admin', 'require_role',
+    'backend/api/analysis.py': [
+        'get_analysis', 'confidence_series',
+        'user_confidence_series', 'user_stats',
     ],
 }
 
@@ -114,6 +117,20 @@ from flask_jwt_extended import get_jwt_identity, verify_jwt_in_request
 from core.helpers import log_operation
 from database import User
 from utils.logger import logger
+
+''',
+    'backend/api/analysis.py': '''"""统计分析接口
+
+路由保留完整路径（不使用 url_prefix），确保 URL 与拆分前一致。
+"""
+import json
+
+from flask import Blueprint, jsonify, request
+
+from core.auth import get_current_user, require_admin, require_auth, require_role
+from database import db, DetectionHistory, Examination, User
+
+bp = Blueprint('analysis', __name__)
 
 ''',
 }
@@ -207,6 +224,18 @@ def insert_imports(src, report):
     return ''.join(lines)
 
 
+def to_blueprint(chunk, bp_name, url_prefix=None):
+    """把函数源码中的 @app.route 改写为 @bp.route
+
+    刻意不使用 url_prefix：路由保留完整路径（如 /api/admin/dashboard），
+    保证 URL 与拆分前完全一致，也免去改写路径的风险。
+    """
+    chunk = chunk.replace('@app.route(', '@bp.route(')
+    # 唯一的 app.app_context() 用法（AI 流式接口）改为 current_app
+    chunk = chunk.replace('with app.app_context():', 'with current_app.app_context():')
+    return chunk
+
+
 def main():
     lines = SRC.read_text(encoding='utf-8').splitlines(keepends=True)
     tree = ast.parse(''.join(lines))
@@ -224,8 +253,15 @@ def main():
             node = fn_nodes.get(fname)
             if node is None:
                 raise SystemExit(f'未找到函数 {fname}')
-            start = leading_comment_start(lines, node.lineno)
-            chunks.append(''.join(lines[start - 1:node.end_lineno]))
+            # node.lineno 指向 def 行，不含装饰器；必须从首个装饰器算起，
+            # 否则 @app.route / @require_auth 会被丢掉
+            first_line = (node.decorator_list[0].lineno
+                          if node.decorator_list else node.lineno)
+            start = leading_comment_start(lines, first_line)
+            chunk = ''.join(lines[start - 1:node.end_lineno])
+            if module in BLUEPRINTS:
+                chunk = to_blueprint(chunk, BLUEPRINTS[module])
+            chunks.append(chunk)
             for ln in range(start, node.end_lineno + 1):
                 drop_lines.add(ln)
             deps |= used_globals(node, module_names)
