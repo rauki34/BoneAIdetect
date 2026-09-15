@@ -272,7 +272,10 @@ class OperationLog(db.Model):
     url = db.Column(db.String(255))
     ip = db.Column(db.String(50))
     user_agent = db.Column(db.Text)
-    description = db.Column(db.String(255))  # 操作描述
+    # 用 Text 而非 String(255)：操作描述可能包含异常堆栈、SQL 语句等长文本
+    # （实测最长 1421 字符）。SQLite 不强制 VARCHAR 长度，所以此前未暴露；
+    # 迁移到 PostgreSQL 时会报 StringDataRightTruncation。
+    description = db.Column(db.Text)  # 操作描述
     success = db.Column(db.Boolean, default=True)  # 是否成功
     error_msg = db.Column(db.Text)  # 错误信息
     timestamp = db.Column(db.DateTime, default=datetime.utcnow, index=True)
