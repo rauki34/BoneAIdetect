@@ -16,17 +16,27 @@ from pathlib import Path
 SRC = Path('backend/app.py')
 DRY_RUN = '--apply' not in sys.argv
 
+# 模块级常量搬迁：{目标模块: [常量名, ...]}
+CONSTANTS = {
+    'backend/services/ai_service.py': ['AI_SYSTEM_PROMPT'],
+}
+
+# 函数体内 app.app_context() 需改写为 current_app.app_context() 的模块
+NEEDS_CURRENT_APP = {'backend/services/ai_service.py'}
+
 # 蓝图模块 -> 蓝图名（这些模块会把 @app.route 改写为 @bp.route）
 BLUEPRINTS = {
     'backend/api/analysis.py': 'analysis',
+    'backend/api/ai.py': 'ai',
+    'backend/api/message.py': 'message',
 }
 
 # 蓝图模块中「路由函数名 -> 蓝图名」的映射在 PLAN 里由 BLUEPRINTS 推导
 # 目标模块 -> 待搬迁函数名
 PLAN = {
-    'backend/api/analysis.py': [
-        'get_analysis', 'confidence_series',
-        'user_confidence_series', 'user_stats',
+    'backend/services/ai_service.py': [
+        'get_ai_settings', 'get_llm_client', 'generate_ai_advice_async',
+        '_build_assistant_messages', 'call_ai_assistant_api', 'get_mock_reply',
     ],
 }
 
@@ -56,6 +66,54 @@ from utils.logger import logger
 import time
 
 from core.state import captcha_store
+
+''',
+    'backend/services/ai_service.py': '''"""AI 服务层
+
+从 app.py 抽出：AI 配置读取、统一 LLM 客户端构造、医疗建议生成、
+助手对话调用与降级回复。被 api/ai.py 与 api/detection.py 共用。
+"""
+import json
+import threading
+from datetime import datetime
+
+from flask import current_app
+
+from database import db, AIConversation, DetectionHistory, SystemSettings
+from services.llm_client import LLMClient, LLMError
+from utils.logger import logger
+
+''',
+    'backend/api/ai.py': '''"""AI 助手对话接口
+
+路由保留完整路径（不使用 url_prefix），确保 URL 与拆分前一致。
+"""
+import json
+
+from flask import Blueprint, Response, current_app, jsonify, request
+
+from core.auth import get_current_user, require_auth, require_role
+from database import db, AIConversation
+from utils.logger import logger
+
+bp = Blueprint('ai', __name__)
+
+''',
+    'backend/api/message.py': '''"""医患消息与系统公告接口
+
+路由保留完整路径（不使用 url_prefix），确保 URL 与拆分前一致。
+"""
+import json
+
+from flask import Blueprint, jsonify, request
+
+from core.auth import get_current_user, require_auth, require_role
+from core.validators import validate_username
+from database import db, Announcement, AnnouncementRead, DoctorPatientRelation, Message, User
+from datetime import datetime
+from sqlalchemy import func
+
+bp = Blueprint('message', __name__)
 
 ''',
     'backend/core/security.py': '''"""AI 内容安全
@@ -214,13 +272,40 @@ def insert_imports(src, report):
     if anchor is None:
         raise SystemExit('未找到导入插入锚点，请手动添加 import')
 
-    blocks = []
+    blocks, regs = [], []
     for module, (fnames, _deps) in report.items():
         dotted = module.replace('backend/', '').replace('/', '.').removesuffix('.py')
-        names = ', '.join(fnames)
-        blocks.append(f'from {dotted} import {names}  # noqa: E402\n')
+        if module in BLUEPRINTS:
+            # 蓝图：导入 bp 对象并注册，而不是导入被搬走的函数
+            bp_name = BLUEPRINTS[module]
+            blocks.append(f'from {dotted} import bp as {bp_name}_bp  # noqa: E402\n')
+            regs.append(f'app.register_blueprint({bp_name}_bp)\n')
+        else:
+            names = ', '.join(fnames)
+            blocks.append(f'from {dotted} import {names}  # noqa: E402\n')
 
     lines[anchor + 1:anchor + 1] = blocks
+    src = ''.join(lines)
+
+    if regs:
+        src = insert_registrations(src, regs)
+    return src
+
+
+def insert_registrations(src, regs):
+    """把 app.register_blueprint(...) 追加到蓝图注册区末尾"""
+    marker = 'app.register_blueprint('
+    lines = src.splitlines(keepends=True)
+    last = None
+    for i, line in enumerate(lines):
+        if line.startswith(marker):
+            last = i
+            # 跳过跨行调用
+            while not lines[last].rstrip().endswith(')'):
+                last += 1
+    if last is None:
+        raise SystemExit('未找到蓝图注册锚点，请手动注册')
+    lines[last + 1:last + 1] = regs
     return ''.join(lines)
 
 
@@ -242,6 +327,12 @@ def main():
     module_names = collect_module_names(tree)
 
     fn_nodes = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
+    const_nodes = {}
+    for n in tree.body:
+        if isinstance(n, ast.Assign):
+            for t in n.targets:
+                if isinstance(t, ast.Name):
+                    const_nodes[t.id] = n
 
     drop_lines = set()
     report = {}
@@ -249,6 +340,17 @@ def main():
     for module, fnames in PLAN.items():
         chunks = []
         deps = set()
+
+        # 先搬常量
+        for cname in CONSTANTS.get(module, []):
+            node = const_nodes.get(cname)
+            if node is None:
+                raise SystemExit(f'未找到常量 {cname}')
+            start = leading_comment_start(lines, node.lineno)
+            chunks.append(''.join(lines[start - 1:node.end_lineno]))
+            for ln in range(start, node.end_lineno + 1):
+                drop_lines.add(ln)
+
         for fname in fnames:
             node = fn_nodes.get(fname)
             if node is None:
@@ -261,6 +363,9 @@ def main():
             chunk = ''.join(lines[start - 1:node.end_lineno])
             if module in BLUEPRINTS:
                 chunk = to_blueprint(chunk, BLUEPRINTS[module])
+            if module in NEEDS_CURRENT_APP:
+                chunk = chunk.replace('with app.app_context():',
+                                      'with current_app.app_context():')
             chunks.append(chunk)
             for ln in range(start, node.end_lineno + 1):
                 drop_lines.add(ln)
