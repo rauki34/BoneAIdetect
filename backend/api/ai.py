@@ -8,6 +8,7 @@ from flask import Blueprint, Response, current_app, jsonify, request
 from sqlalchemy import func
 
 from core.auth import get_current_user, require_auth, require_role
+from core.ratelimit import limit
 from database import db, AIConversation
 from services.ai_service import (
     _build_assistant_messages, call_ai_assistant_api, get_llm_client,
@@ -18,6 +19,7 @@ from utils.logger import logger
 bp = Blueprint('ai', __name__)
 
 @bp.route("/api/ai-assistant/chat/stream", methods=["POST"])
+@limit('ai_chat', key='user')   # AI 调用按用户限流：token 计费，成本归属需清晰
 @require_role('patient', 'doctor', 'admin')
 def ai_assistant_chat_stream():
     """AI助手流式对话（SSE）
@@ -99,6 +101,7 @@ def ai_assistant_chat_stream():
     )
 
 @bp.route("/api/ai-assistant/chat", methods=["POST"])
+@limit('ai_chat', key='user')   # AI 调用按用户限流
 @require_role('patient', 'doctor', 'admin')
 def ai_assistant_chat():
     """AI助手对话接口 - 使用系统配置的AI服务"""

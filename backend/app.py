@@ -83,7 +83,7 @@ from core.captcha import check_captcha  # noqa: E402
 # 初始化数据库
 init_db(app)
 from core.security import filter_sensitive_content, detect_prompt_injection, sanitize_ai_input  # noqa: E402
-from core.ratelimit import check_rate_limit, rate_limit  # noqa: E402
+from core.ratelimit import check_rate_limit, limit, rate_limit  # noqa: E402
 from core.auth import get_current_user, require_auth, require_admin, require_role  # noqa: E402
 
 # 在应用启动时迁移 JSON 数据（如果存在）
@@ -303,6 +303,7 @@ def handle_unexpected_error(error):
 # ==================== 用户认证接口 ====================
 
 @app.route("/api/login", methods=["POST"])
+@limit('login', key='ip')     # 按 IP 防爆破：攻击者用随机用户名，按账号拦不住
 def login():
     data = request.json
     username = data.get("username", "").strip()
@@ -393,6 +394,7 @@ def login():
 
 
 @app.route("/api/register", methods=["POST"])
+@limit('register', key='ip')  # 防脚本批量注册
 def register():
     data = request.json
     username = data.get("username", "").strip()
@@ -1218,6 +1220,7 @@ def update_user(user_id):
 
 
 @app.route("/api/interpret", methods=["POST"])
+@limit('ai_chat', key='user')   # AI 调用按用户限流：token 计费，成本归属需清晰
 @require_role('admin', 'doctor')
 def interpret_detection():
     """
@@ -1993,6 +1996,7 @@ def camera_detect():
 # ==================== 验证码接口 ====================
 
 @app.route("/api/captcha", methods=["GET"])
+@limit('captcha', key='ip')   # 防批量拉取验证码
 def generate_captcha():
     """生成验证码"""
     # 生成4位随机验证码
@@ -3524,6 +3528,7 @@ def patient_get_report_detail(report_id):
 # -------------------- 患者注册 API --------------------
 
 @app.route("/api/patient/register", methods=["POST"])
+@limit('register', key='ip')  # 防脚本批量注册
 def patient_register():
     """患者注册"""
     data = request.json
@@ -3625,6 +3630,7 @@ def patient_register():
 # -------------------- 医生注册申请 API --------------------
 
 @app.route("/api/doctor/register", methods=["POST"])
+@limit('register', key='ip')  # 防脚本批量提交入驻申请
 def doctor_register():
     """医生注册申请"""
     data = request.json

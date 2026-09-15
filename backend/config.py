@@ -62,6 +62,14 @@ class Config:
     RATE_LIMIT_AI = int(_env('RATE_LIMIT_AI', 10))            # AI 对话：次/分钟
     RATE_LIMIT_GENERAL = int(_env('RATE_LIMIT_GENERAL', 100))  # 通用：次/分钟
 
+    # 是否信任反向代理传来的 X-Forwarded-For。
+    # 直连部署时必须保持 False —— 该头可被客户端伪造，
+    # 信任它会让攻击者通过伪造 IP 绕过限流。
+    TRUST_PROXY = _env('TRUST_PROXY', 'false').lower() == 'true'
+
+    # 不限流的角色（急诊场景下不应因限流阻断医护使用）
+    RATE_LIMIT_BYPASS_ROLES = _env('RATE_LIMIT_BYPASS_ROLES', 'admin').split(',')
+
 
 class DevelopmentConfig(Config):
     DEBUG = True

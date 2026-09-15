@@ -51,14 +51,40 @@ def init_models():
 rate_limit_storage = defaultdict(list)
 rate_limit_lock = Lock()
 
-# 限流配置（键名与结构须与 consume 处保持一致）
+def _env_int(key, default):
+    """从环境变量读取整数阈值（.env 已由 app.py 在最顶部加载）"""
+    raw = os.environ.get(key)
+    try:
+        return int(raw) if raw not in (None, '') else default
+    except ValueError:
+        return default
+
+
+# 限流配置：按防护目标分层，key 的选择见 core/ratelimit.limit()
+#   login / register —— 认证层，按 IP（攻击者用随机用户名，按账号拦不住）
+#   ai_chat          —— 成本层，按用户（token 计费，成本归属需清晰）
+#   api_general      —— 通用层，按用户或 IP
+#
+# 阈值可用环境变量覆盖，便于测试环境放宽（RATE_LIMIT_LOGIN=100 等）
 RATE_LIMIT_CONFIG = {
-    'ai_chat': {
-        'max_requests': 10,   # 最大请求数
-        'time_window': 60,    # 时间窗口(秒)
+    'login': {                    # 登录：防爆破、撞库
+        'max_requests': _env_int('RATE_LIMIT_LOGIN', 5),
+        'time_window': 60,
+    },
+    'register': {                 # 注册：防脚本批量注册
+        'max_requests': _env_int('RATE_LIMIT_REGISTER', 3),
+        'time_window': 300,
+    },
+    'captcha': {                  # 验证码：防批量拉取
+        'max_requests': _env_int('RATE_LIMIT_CAPTCHA', 20),
+        'time_window': 60,
+    },
+    'ai_chat': {                  # AI 调用：控成本
+        'max_requests': _env_int('RATE_LIMIT_AI', 10),
+        'time_window': 60,
     },
     'api_general': {
-        'max_requests': 100,
+        'max_requests': _env_int('RATE_LIMIT_GENERAL', 100),
         'time_window': 60,
     },
 }
