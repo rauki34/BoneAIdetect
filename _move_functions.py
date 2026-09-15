@@ -17,7 +17,7 @@ SRC = Path('backend/app.py')
 DRY_RUN = '--apply' not in sys.argv
 
 # 追加模式：向已存在的模块追加函数，保留其原有内容（不覆盖）
-APPEND_MODULES = {'backend/core/helpers.py'}
+APPEND_MODULES = {'backend/core/helpers.py', 'backend/api/auth.py'}
 
 # 模块级常量搬迁：{目标模块: [常量名, ...]}
 CONSTANTS = {
@@ -34,20 +34,18 @@ BLUEPRINTS = {
     'backend/api/message.py': 'message',
     'backend/api/auth.py': 'auth',
     'backend/api/detection.py': 'detection',
+    'backend/api/patient.py': 'patient',
 }
 
 # 蓝图模块中「路由函数名 -> 蓝图名」的映射在 PLAN 里由 BLUEPRINTS 推导
 # 目标模块 -> 待搬迁函数名
 PLAN = {
-    'backend/core/helpers.py': ['get_filtered_reports'],
-    'backend/api/auth.py': [
-        'login', 'register', 'logout', 'generate_captcha',
-        'verify_captcha', 'forgot_password_verify', 'forgot_password_reset',
-    ],
-    'backend/api/detection.py': [
-        'predict', 'get_history', 'delete_history', 'clear_history',
-        'save_medical_advice', 'get_history_detail', 'interpret_detection',
-        'video_detect', 'camera_detect', 'process_video_stream',
+    'backend/api/auth.py': ['patient_register', 'doctor_register'],
+    'backend/api/patient.py': [
+        'get_user_ai_models', 'patient_get_reports', 'patient_get_report_detail',
+        'get_patient_profile', 'get_patient_medical_records', 'get_patient_doctors',
+        'get_patient_detection_reports', 'get_patient_messages',
+        'mark_message_read', 'update_patient_profile',
     ],
 }
 
@@ -176,6 +174,25 @@ from services.llm_client import (
 from utils.logger import logger
 
 bp = Blueprint('detection', __name__)
+
+''',
+    'backend/api/patient.py': '''"""患者端接口：报告、病历、主治医生、个人资料、AI 模型配置
+
+路由保留完整路径（不使用 url_prefix），确保 URL 与拆分前一致。
+"""
+from datetime import datetime
+
+from flask import Blueprint, jsonify, request
+
+from core.auth import get_current_user, require_auth, require_role
+from core.helpers import get_filtered_reports
+from database import (
+    CustomModel, DetectionHistory, DoctorPatientRelation, DoctorProfile,
+    MedicalRecord, Message, PatientProfile, User, UserAIModel, db,
+)
+from utils.logger import logger
+
+bp = Blueprint('patient', __name__)
 
 ''',
     'backend/api/message.py': '''"""医患消息与系统公告接口
@@ -354,14 +371,18 @@ def insert_imports(src, report):
     if anchor is None:
         raise SystemExit('未找到导入插入锚点，请手动添加 import')
 
+    src_raw = ''.join(lines)
     blocks, regs = [], []
     for module, (fnames, _deps) in report.items():
         dotted = module.replace('backend/', '').replace('/', '.').removesuffix('.py')
         if module in BLUEPRINTS:
-            # 蓝图：导入 bp 对象并注册，而不是导入被搬走的函数
+            # 蓝图：导入 bp 对象并注册，而不是导入被搬走的函数。
+            # 追加模式下可能重复处理同一模块，需去重避免重复注册
             bp_name = BLUEPRINTS[module]
-            blocks.append(f'from {dotted} import bp as {bp_name}_bp  # noqa: E402\n')
-            regs.append(f'app.register_blueprint({bp_name}_bp)\n')
+            if f'import {bp_name}_bp' not in src_raw:
+                blocks.append(f'from {dotted} import bp as {bp_name}_bp  # noqa: E402\n')
+            if f'register_blueprint({bp_name}_bp)' not in src_raw:
+                regs.append(f'app.register_blueprint({bp_name}_bp)\n')
         else:
             names = ', '.join(fnames)
             blocks.append(f'from {dotted} import {names}  # noqa: E402\n')

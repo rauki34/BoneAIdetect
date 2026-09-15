@@ -4,6 +4,7 @@
 """
 import io
 import random
+import re
 import time
 from datetime import datetime
 
@@ -21,7 +22,7 @@ from core.validators import (
     validate_email, validate_password, validate_phone,
     validate_role, validate_username,
 )
-from database import PatientProfile, User, db
+from database import DoctorRegistration, PatientProfile, User, db
 from utils.logger import logger
 
 bp = Blueprint('auth', __name__)
@@ -388,3 +389,186 @@ def forgot_password_reset():
         db.session.rollback()
         logger.error(f"重置密码失败: {e}")
         return jsonify({"error": "重置失败"}), 500
+
+
+# ==================== 智慧骨科系统 API ====================
+
+# -------------------- 患者注册 API --------------------
+
+@bp.route("/api/patient/register", methods=["POST"])
+@limit('register', key='ip')  # 防脚本批量注册
+def patient_register():
+    """患者注册"""
+    data = request.json
+
+    # 校验验证码：防止脚本批量注册
+    ok, error = check_captcha(
+        data.get("captcha", "").strip(),
+        data.get("captcha_id", "").strip(),
+    )
+    if not ok:
+        return jsonify({"error": error, "error_code": "CAPTCHA_001"}), 400
+
+    # 提取基本信息
+    username = data.get("username", "").strip()
+    password = data.get("password", "").strip()
+    full_name = data.get("full_name", "").strip()
+    id_card = data.get("id_card", "").strip()
+    gender = data.get("gender", "男")
+    birth_date = data.get("birth_date")
+    phone = data.get("phone", "").strip()
+    email = data.get("email", "").strip()
+    address = data.get("address", "").strip()
+    emergency_contact = data.get("emergency_contact", "").strip()
+    emergency_phone = data.get("emergency_phone", "").strip()
+    allergies = data.get("allergies", "").strip()
+    medical_history = data.get("medical_history", "").strip()
+    
+    # 验证必填字段
+    if not all([username, password, full_name, id_card, phone]):
+        return jsonify({"error": "请填写所有必填字段"}), 400
+    
+    # 验证手机号格式
+    valid, error_msg = validate_phone(phone)
+    if not valid:
+        return jsonify({"error": error_msg}), 400
+    
+    # 验证紧急联系人电话（如果有）
+    if emergency_phone:
+        valid, error_msg = validate_phone(emergency_phone)
+        if not valid:
+            return jsonify({"error": "紧急联系人电话" + error_msg}), 400
+    
+    # 检查用户名是否已存在
+    if User.query.filter_by(username=username).first():
+        return jsonify({"error": "用户名已存在"}), 409
+    
+    # 检查身份证号是否已存在
+    existing_profile = PatientProfile.query.filter_by(id_card=id_card).first()
+    if existing_profile:
+        return jsonify({"error": "该身份证号已注册"}), 409
+    
+    try:
+        # 创建用户
+        new_user = User(
+            username=username,
+            password=generate_password_hash(password),
+            role='patient',
+            full_name=full_name,
+            email=email,
+            phone=phone
+        )
+        db.session.add(new_user)
+        db.session.flush()  # 获取user_id
+        
+        # 生成病历号
+        patient_number = f"P{datetime.now().strftime('%Y%m%d')}{new_user.id:04d}"
+        
+        # 创建患者档案
+        patient_profile = PatientProfile(
+            user_id=new_user.id,
+            patient_number=patient_number,
+            id_card=id_card,
+            gender=gender,
+            birth_date=datetime.strptime(birth_date, '%Y-%m-%d').date() if birth_date else None,
+            address=address,
+            emergency_contact=emergency_contact,
+            emergency_phone=emergency_phone,
+            allergies=allergies,
+            medical_history=medical_history
+        )
+        db.session.add(patient_profile)
+        db.session.commit()
+        
+        log_operation(f"患者注册:{username}")
+        
+        return jsonify({
+            "success": True,
+            "message": "注册成功",
+            "username": username,
+            "patient_number": patient_number
+        }), 201
+        
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f"患者注册失败: {e}")
+        return jsonify({"error": "注册失败，请稍后重试"}), 500
+
+# -------------------- 医生注册申请 API --------------------
+
+@bp.route("/api/doctor/register", methods=["POST"])
+@limit('register', key='ip')  # 防脚本批量提交入驻申请
+def doctor_register():
+    """医生注册申请"""
+    data = request.json
+
+    # 校验验证码：防止脚本批量提交入驻申请
+    ok, error = check_captcha(
+        data.get("captcha", "").strip(),
+        data.get("captcha_id", "").strip(),
+    )
+    if not ok:
+        return jsonify({"error": error, "error_code": "CAPTCHA_001"}), 400
+
+    username = data.get("username", "").strip()
+    password = data.get("password", "").strip()
+    full_name = data.get("full_name", "").strip()
+    hospital = data.get("hospital", "").strip()
+    department = data.get("department", "").strip()
+    title = data.get("title", "").strip()
+    license_number = data.get("license_number", "").strip()
+    specialty = data.get("specialty", "").strip()
+    phone = data.get("phone", "").strip()
+    email = data.get("email", "").strip()
+    
+    # 验证必填字段
+    if not all([username, password, full_name, hospital, department, title, license_number]):
+        return jsonify({"error": "请填写所有必填字段"}), 400
+    
+    # 验证手机号格式
+    valid, error_msg = validate_phone(phone)
+    if not valid:
+        return jsonify({"error": error_msg}), 400
+    
+    # 验证执业证号格式（110开头，15位数字）
+    if not re.match(r'^110\d{12}$', license_number):
+        return jsonify({"error": "执业证号格式不正确，应为110开头的15位数字"}), 400
+    
+    # 检查用户名是否已存在
+    if User.query.filter_by(username=username).first():
+        return jsonify({"error": "用户名已存在"}), 409
+    
+    # 检查是否已有待审核的申请
+    existing = DoctorRegistration.query.filter_by(username=username, status='pending').first()
+    if existing:
+        return jsonify({"error": "您已提交申请，请等待审核"}), 409
+    
+    try:
+        # 创建医生注册申请
+        registration = DoctorRegistration(
+            username=username,
+            password=generate_password_hash(password),
+            full_name=full_name,
+            email=email,
+            phone=phone,
+            department=department,
+            title=title,
+            license_number=license_number,
+            hospital=hospital,
+            specialty=specialty,
+            status='pending'
+        )
+        db.session.add(registration)
+        db.session.commit()
+        
+        log_operation(f"医生注册申请:{username}")
+        
+        return jsonify({
+            "success": True,
+            "message": "申请已提交，请等待管理员审核"
+        }), 201
+        
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f"医生申请失败: {e}")
+        return jsonify({"error": "提交失败，请稍后重试"}), 500
