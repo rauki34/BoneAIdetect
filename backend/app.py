@@ -1,7 +1,18 @@
+# 加载 .env —— 必须位于任何项目模块导入之前。
+# utils.logger 在**导入时**就会读取 LOG_LEVEL，若此时 .env 尚未加载，
+# 其中的配置会被静默忽略。
+import os
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env'))
+except ImportError:
+    pass   # 未安装 python-dotenv 时回退到系统环境变量
+
 from flask import Flask, request, jsonify, send_from_directory, session, Response
 from flask_cors import CORS
 from ultralytics import YOLO
-import os, time, cv2, json, glob, random, io, sys
+import time, cv2, json, glob, random, io, sys
 import requests
 from datetime import datetime
 from pathlib import Path
@@ -29,13 +40,6 @@ captcha_store = {}
 CAPTCHA_TIMEOUT = 300  # 5分钟过期
 
 app = Flask(__name__)
-
-# 加载 .env 文件（可选：未安装 python-dotenv 时自动跳过，直接读取系统环境变量）
-try:
-    from dotenv import load_dotenv
-    load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env'))
-except ImportError:
-    pass
 
 # 从 config.py 统一加载配置
 # 优先级：环境变量 > config.py 默认值
