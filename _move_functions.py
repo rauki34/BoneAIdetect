@@ -16,6 +16,9 @@ from pathlib import Path
 SRC = Path('backend/app.py')
 DRY_RUN = '--apply' not in sys.argv
 
+# 追加模式：向已存在的模块追加函数，保留其原有内容（不覆盖）
+APPEND_MODULES = {'backend/core/helpers.py'}
+
 # 模块级常量搬迁：{目标模块: [常量名, ...]}
 CONSTANTS = {
     'backend/services/ai_service.py': ['AI_SYSTEM_PROMPT'],
@@ -29,19 +32,22 @@ BLUEPRINTS = {
     'backend/api/analysis.py': 'analysis',
     'backend/api/ai.py': 'ai',
     'backend/api/message.py': 'message',
+    'backend/api/auth.py': 'auth',
+    'backend/api/detection.py': 'detection',
 }
 
 # 蓝图模块中「路由函数名 -> 蓝图名」的映射在 PLAN 里由 BLUEPRINTS 推导
 # 目标模块 -> 待搬迁函数名
 PLAN = {
-    'backend/api/ai.py': [
-        'ai_assistant_chat_stream', 'ai_assistant_chat',
-        'ai_assistant_history', 'ai_assistant_sessions',
+    'backend/core/helpers.py': ['get_filtered_reports'],
+    'backend/api/auth.py': [
+        'login', 'register', 'logout', 'generate_captcha',
+        'verify_captcha', 'forgot_password_verify', 'forgot_password_reset',
     ],
-    'backend/api/message.py': [
-        'send_message', 'get_conversation', 'get_message_contacts',
-        'mark_messages_read', 'get_announcements',
-        'mark_announcement_read', 'get_unread_announcement_count',
+    'backend/api/detection.py': [
+        'predict', 'get_history', 'delete_history', 'clear_history',
+        'save_medical_advice', 'get_history_detail', 'interpret_detection',
+        'video_detect', 'camera_detect', 'process_video_stream',
     ],
 }
 
@@ -106,6 +112,70 @@ from services.llm_client import LLMError
 from utils.logger import logger
 
 bp = Blueprint('ai', __name__)
+
+''',
+    'backend/api/auth.py': '''"""认证接口：登录 / 注册 / 登出 / 验证码 / 找回密码
+
+路由保留完整路径（不使用 url_prefix），确保 URL 与拆分前一致。
+"""
+import io
+import random
+import time
+from datetime import datetime
+
+from flask import Blueprint, jsonify, request, session
+from flask_jwt_extended import create_access_token
+from PIL import Image, ImageDraw, ImageFont
+from werkzeug.security import check_password_hash, generate_password_hash
+
+from core.auth import get_current_user, require_auth
+from core.captcha import check_captcha
+from core.helpers import log_operation
+from core.ratelimit import limit
+from core.state import CAPTCHA_TIMEOUT, captcha_store
+from core.validators import (
+    validate_email, validate_password, validate_phone,
+    validate_role, validate_username,
+)
+from database import PatientProfile, User, db
+from utils.logger import logger
+
+bp = Blueprint('auth', __name__)
+
+''',
+    'backend/api/detection.py': '''"""检测接口：图像/视频/摄像头检测、检测历史、影像解读
+
+路由保留完整路径（不使用 url_prefix），确保 URL 与拆分前一致。
+
+注意：WebSocket 推流路由 /ws/video/<task_id> 依赖绑定 app 实例的
+flask_sock 扩展，仍保留在 app.py。
+"""
+import base64
+import json
+import os
+import threading
+import time
+from datetime import datetime
+
+import cv2
+import numpy as np
+import requests
+from flask import Blueprint, jsonify, request
+from ultralytics import YOLO
+
+from core.auth import get_current_user, require_auth, require_role
+from core.helpers import get_filtered_reports, log_operation
+from core.paths import MODEL_CANDIDATES, RESULTS, UPLOADS
+from core.ratelimit import limit
+from core.state import models, video_tasks
+from database import CustomModel, DetectionHistory, db
+from services.ai_service import get_ai_settings, get_llm_client
+from services.llm_client import (
+    LLMConfigError, LLMConnectionError, LLMTimeoutError,
+)
+from utils.logger import logger
+
+bp = Blueprint('detection', __name__)
 
 ''',
     'backend/api/message.py': '''"""医患消息与系统公告接口
@@ -388,7 +458,11 @@ def main():
             p = Path(module)
             p.parent.mkdir(parents=True, exist_ok=True)
             body = '\n\n'.join(c.rstrip('\n') for c in chunks)
-            header = MODULE_HEADERS.get(module, '')
+            if module in APPEND_MODULES and p.exists():
+                # 追加模式：保留原内容，只在其后拼接
+                header = p.read_text(encoding='utf-8').rstrip('\n') + '\n\n\n'
+            else:
+                header = MODULE_HEADERS.get(module, '')
             p.write_text(header + body + '\n', encoding='utf-8')
 
     if not DRY_RUN:

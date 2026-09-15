@@ -4,7 +4,7 @@
 """
 from flask import request
 
-from database import db, OperationLog
+from database import DetectionHistory, OperationLog, db
 from utils.logger import logger
 
 # ==================== 操作日志接口（借鉴pear-admin-flask）====================
@@ -45,3 +45,45 @@ def log_operation(description, success=True, error_msg=None):
             db.session.rollback()
         except:
             pass
+
+
+# ==================== 数据隔离过滤函数 ====================
+
+def get_filtered_reports(user):
+    """根据用户角色过滤报告
+    
+    Args:
+        user: 当前用户对象
+    
+    Returns:
+        Query: 过滤后的DetectionHistory查询对象，使用eager loading避免N+1查询
+    
+    规则:
+        - admin: 返回所有报告
+        - doctor: 只返回该医生创建的报告
+        - patient: 只返回关联到该患者的报告
+        - 其他: 返回空查询
+    
+    需求: 13.4
+    """
+    # 使用joinedload进行eager loading，避免N+1查询问题
+    from sqlalchemy.orm import joinedload
+    
+    if user.role == 'admin':
+        return DetectionHistory.query.options(
+            joinedload(DetectionHistory.doctor),
+            joinedload(DetectionHistory.patient)
+        )
+    elif user.role == 'doctor':
+        return DetectionHistory.query.options(
+            joinedload(DetectionHistory.doctor),
+            joinedload(DetectionHistory.patient)
+        ).filter_by(username=user.username)
+    elif user.role == 'patient':
+        return DetectionHistory.query.options(
+            joinedload(DetectionHistory.doctor),
+            joinedload(DetectionHistory.patient)
+        ).filter_by(patient_id=user.id)
+    else:
+        # 未知角色,返回空查询
+        return DetectionHistory.query.filter(False)
