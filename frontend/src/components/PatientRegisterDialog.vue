@@ -120,6 +120,20 @@
           placeholder="请填写既往病史（没有请填'无'）"
         />
       </el-form-item>
+
+      <el-form-item label="验证码" prop="captcha">
+        <div class="captcha-row">
+          <el-input
+            v-model="form.captcha"
+            placeholder="请输入验证码"
+            maxlength="4"
+            style="flex: 1"
+          />
+          <div class="captcha-image" @click="refreshCaptcha">
+            <img v-if="captchaImage" :src="captchaImage" alt="验证码" />
+          </div>
+        </div>
+      </el-form-item>
     </el-form>
 
     <!-- 步骤3: 完成 -->
@@ -198,8 +212,26 @@ const form = reactive({
   emergencyContact: '',
   emergencyPhone: '',
   allergies: '',
-  medicalHistory: ''
+  medicalHistory: '',
+  captcha: ''
 })
+
+// 验证码
+const captchaId = ref('')
+const captchaImage = ref('')
+
+const refreshCaptcha = async () => {
+  try {
+    const res = await axios.get('/api/captcha', { responseType: 'blob' })
+    captchaId.value = res.headers['x-captcha-id'] || ''
+    const reader = new FileReader()
+    reader.onload = () => { captchaImage.value = reader.result }
+    reader.readAsDataURL(res.data)
+    form.captcha = ''
+  } catch (err) {
+    console.error('获取验证码失败:', err)
+  }
+}
 
 // 验证身份证号
 const validateIdCard = (rule, value, callback) => {
@@ -321,15 +353,17 @@ const step2Rules = {
   emergencyContact: [{ required: true, message: '请输入紧急联系人', trigger: 'blur' }],
   emergencyPhone: [{ required: true, validator: validatePhone, trigger: 'blur' }],
   allergies: [{ required: true, message: '请填写过敏史', trigger: 'blur' }],
-  medicalHistory: [{ required: true, message: '请填写既往病史', trigger: 'blur' }]
+  medicalHistory: [{ required: true, message: '请填写既往病史', trigger: 'blur' }],
+  captcha: [{ required: true, message: '请输入验证码', trigger: 'blur' }]
 }
 
 const nextStep = async () => {
   if (!step1FormRef.value) return
-  
+
   await step1FormRef.value.validate((valid) => {
     if (valid) {
       currentStep.value++
+      refreshCaptcha()   // 进入第 2 步即加载验证码
     }
   })
 }
@@ -355,9 +389,11 @@ const submitRegister = async () => {
         emergency_contact: form.emergencyContact,
         emergency_phone: form.emergencyPhone,
         allergies: form.allergies,
-        medical_history: form.medicalHistory
+        medical_history: form.medicalHistory,
+        captcha: form.captcha,
+        captcha_id: captchaId.value
       })
-      
+
       if (res.data.success) {
         currentStep.value = 2
         emit('success')
@@ -365,6 +401,8 @@ const submitRegister = async () => {
     } catch (err) {
       const msg = err.response?.data?.error || '注册失败'
       ElMessage.error(msg)
+      // 验证码一次性使用，失败后需要换一张
+      refreshCaptcha()
     } finally {
       loading.value = false
     }
@@ -406,6 +444,34 @@ watch(() => props.modelValue, (val) => {
 .register-form :deep(.el-input__wrapper),
 .register-form :deep(.el-textarea__inner) {
   border-radius: 8px;
+}
+
+/* 验证码 */
+.captcha-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  width: 100%;
+}
+
+.captcha-image {
+  flex-shrink: 0;
+  width: 110px;
+  height: 38px;
+  border: 1px solid #dcdfe6;
+  border-radius: 8px;
+  overflow: hidden;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #fff;
+}
+
+.captcha-image img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .success-step {

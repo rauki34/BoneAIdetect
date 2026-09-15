@@ -111,6 +111,20 @@
       <el-form-item label="邮箱" prop="email">
         <el-input v-model="form.email" placeholder="请输入邮箱地址" />
       </el-form-item>
+
+      <el-form-item label="验证码" prop="captcha">
+        <div class="captcha-row">
+          <el-input
+            v-model="form.captcha"
+            placeholder="请输入验证码"
+            maxlength="4"
+            style="flex: 1"
+          />
+          <div class="captcha-image" @click="refreshCaptcha">
+            <img v-if="captchaImage" :src="captchaImage" alt="验证码" />
+          </div>
+        </div>
+      </el-form-item>
     </el-form>
 
     <template #footer>
@@ -128,7 +142,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed } from 'vue'
+import { ref, reactive, computed, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { MagicStick } from '@element-plus/icons-vue'
 import axios from '../utils/axios'
@@ -161,7 +175,30 @@ const form = reactive({
   licenseNumber: '',
   specialty: '',
   phone: '',
-  email: ''
+  email: '',
+  captcha: ''
+})
+
+// 验证码
+const captchaId = ref('')
+const captchaImage = ref('')
+
+const refreshCaptcha = async () => {
+  try {
+    const res = await axios.get('/api/captcha', { responseType: 'blob' })
+    captchaId.value = res.headers['x-captcha-id'] || ''
+    const reader = new FileReader()
+    reader.onload = () => { captchaImage.value = reader.result }
+    reader.readAsDataURL(res.data)
+    form.captcha = ''
+  } catch (err) {
+    console.error('获取验证码失败:', err)
+  }
+}
+
+// 弹窗打开时加载验证码
+watch(visible, (val) => {
+  if (val) refreshCaptcha()
 })
 
 // 验证手机号
@@ -249,7 +286,8 @@ const rules = {
   email: [
     { required: true, message: '请输入邮箱', trigger: 'blur' },
     { type: 'email', message: '邮箱格式不正确', trigger: 'blur' }
-  ]
+  ],
+  captcha: [{ required: true, message: '请输入验证码', trigger: 'blur' }]
 }
 
 // 自动填充测试数据
@@ -291,7 +329,9 @@ const submitApplication = async () => {
         license_number: form.licenseNumber,
         specialty: form.specialty,
         phone: form.phone,
-        email: form.email
+        email: form.email,
+        captcha: form.captcha,
+        captcha_id: captchaId.value
       })
 
       if (res.data.success) {
@@ -303,6 +343,8 @@ const submitApplication = async () => {
     } catch (err) {
       const msg = err.response?.data?.error || '提交失败'
       ElMessage.error(msg)
+      // 验证码一次性使用，失败后需要换一张
+      refreshCaptcha()
     } finally {
       loading.value = false
     }
@@ -328,6 +370,34 @@ const resetForm = () => {
 
 .dialog-header {
   margin-bottom: 20px;
+}
+
+/* 验证码 */
+.captcha-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  width: 100%;
+}
+
+.captcha-image {
+  flex-shrink: 0;
+  width: 110px;
+  height: 38px;
+  border: 1px solid #dcdfe6;
+  border-radius: 8px;
+  overflow: hidden;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #fff;
+}
+
+.captcha-image img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .section-title {

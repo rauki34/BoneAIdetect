@@ -4272,7 +4272,15 @@ def patient_get_report_detail(report_id):
 def patient_register():
     """患者注册"""
     data = request.json
-    
+
+    # 校验验证码：防止脚本批量注册
+    ok, error = check_captcha(
+        data.get("captcha", "").strip(),
+        data.get("captcha_id", "").strip(),
+    )
+    if not ok:
+        return jsonify({"error": error, "error_code": "CAPTCHA_001"}), 400
+
     # 提取基本信息
     username = data.get("username", "").strip()
     password = data.get("password", "").strip()
@@ -4365,7 +4373,15 @@ def patient_register():
 def doctor_register():
     """医生注册申请"""
     data = request.json
-    
+
+    # 校验验证码：防止脚本批量提交入驻申请
+    ok, error = check_captcha(
+        data.get("captcha", "").strip(),
+        data.get("captcha_id", "").strip(),
+    )
+    if not ok:
+        return jsonify({"error": error, "error_code": "CAPTCHA_001"}), 400
+
     username = data.get("username", "").strip()
     password = data.get("password", "").strip()
     full_name = data.get("full_name", "").strip()
