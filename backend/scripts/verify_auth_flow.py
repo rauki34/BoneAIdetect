@@ -34,7 +34,8 @@ def check(name, cond, detail=''):
 
 def discover_users():
     """从数据库取各角色真实存在的账号，避免硬编码用户名"""
-    from app import app, User
+    from app import app
+    from database import User
     users = {}
     with app.app_context():
         for role in ('admin', 'patient', 'doctor'):

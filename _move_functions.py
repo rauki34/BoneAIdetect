@@ -35,17 +35,38 @@ BLUEPRINTS = {
     'backend/api/auth.py': 'auth',
     'backend/api/detection.py': 'detection',
     'backend/api/patient.py': 'patient',
+    'backend/api/doctor.py': 'doctor',
+    'backend/api/training.py': 'training',
+    'backend/api/admin.py': 'admin',
 }
 
 # 蓝图模块中「路由函数名 -> 蓝图名」的映射在 PLAN 里由 BLUEPRINTS 推导
 # 目标模块 -> 待搬迁函数名
 PLAN = {
-    'backend/api/auth.py': ['patient_register', 'doctor_register'],
-    'backend/api/patient.py': [
-        'get_user_ai_models', 'patient_get_reports', 'patient_get_report_detail',
-        'get_patient_profile', 'get_patient_medical_records', 'get_patient_doctors',
-        'get_patient_detection_reports', 'get_patient_messages',
-        'mark_message_read', 'update_patient_profile',
+    'backend/core/helpers.py': ['Logger', 'save_user_ai_model'],
+    'backend/api/doctor.py': [
+        'patients', 'patient_detail', 'examinations', 'examination_detail',
+        'doctor_get_patients', 'doctor_create_report', 'doctor_get_reports',
+        'doctor_update_report', 'get_doctor_dashboard', 'doctor_add_patient',
+        'archive_patient', 'get_all_patients', 'doctor_create_record',
+        'doctor_update_record', 'update_profile',
+    ],
+    'backend/api/training.py': [
+        'get_datasets', 'upload_dataset', 'update_dataset', 'delete_dataset',
+        'get_all_datasets', 'get_models', 'get_published_models', 'train_model',
+        'get_training_progress', 'publish_model', 'disable_model', 'enable_model',
+        'delete_model', 'cleanup_orphaned_training_runs', 'get_training_tasks',
+        'get_training_task', 'get_training_logs', 'stop_training_task',
+        'train_model_task',
+    ],
+    'backend/api/admin.py': [
+        'get_settings', 'update_settings', 'get_users', 'create_user',
+        'delete_user', 'update_user', 'get_logs', 'delete_log', 'clear_logs',
+        'get_admin_dashboard', 'approve_doctor_registration',
+        'get_admin_statistics', 'get_admin_statistics_detailed',
+        'generate_test_data', 'admin_update_user', 'admin_reset_password',
+        'get_admin_announcements', 'create_announcement',
+        'update_announcement', 'delete_announcement',
     ],
 }
 
@@ -174,6 +195,84 @@ from services.llm_client import (
 from utils.logger import logger
 
 bp = Blueprint('detection', __name__)
+
+''',
+    'backend/api/doctor.py': '''"""医生端接口：患者管理、病历、检查、报告
+
+路由保留完整路径（不使用 url_prefix），确保 URL 与拆分前一致。
+"""
+import json
+import random
+import re
+from datetime import datetime
+
+from flask import Blueprint, jsonify, request
+from werkzeug.security import generate_password_hash
+
+from core.auth import get_current_user, require_auth, require_role
+from core.helpers import get_filtered_reports, log_operation
+from core.validators import calculate_age
+from database import (
+    DetectionHistory, DoctorPatientRelation, DoctorProfile, Examination,
+    MedicalRecord, Patient, PatientProfile, User, db,
+)
+from utils.logger import logger
+
+bp = Blueprint('doctor', __name__)
+
+''',
+    'backend/api/training.py': '''"""模型训练与数据集管理接口
+
+路由保留完整路径（不使用 url_prefix），确保 URL 与拆分前一致。
+"""
+import glob
+import json
+import os
+import sys
+import threading
+import time
+from datetime import datetime
+
+import torch
+from flask import Blueprint, jsonify, request
+from ultralytics import YOLO
+
+from core.auth import get_current_user, require_auth, require_role
+from core.helpers import Logger, log_operation
+from core.paths import BASE_DIR, BASE_MODEL_MAP, MODELS_DIR, UPLOADS
+from core.state import models, training_stop_flags
+from database import CustomModel, TrainingTask, db
+from utils.logger import logger
+
+bp = Blueprint('training', __name__)
+
+''',
+    'backend/api/admin.py': '''"""管理后台接口：用户、日志、设置、公告、统计
+
+路由保留完整路径（不使用 url_prefix），确保 URL 与拆分前一致。
+"""
+import json
+import random
+import re
+from datetime import datetime
+
+from flask import Blueprint, jsonify, request
+from werkzeug.security import generate_password_hash
+
+from core.auth import get_current_user, require_auth, require_role
+from core.helpers import log_operation, save_user_ai_model
+from core.validators import (
+    validate_email, validate_password, validate_phone,
+    validate_role, validate_username,
+)
+from database import (
+    Announcement, AnnouncementRead, CustomModel, DetectionHistory,
+    DoctorProfile, DoctorRegistration, Examination, MedicalRecord,
+    OperationLog, Patient, PatientProfile, SystemSettings, User, db,
+)
+from utils.logger import logger
+
+bp = Blueprint('admin', __name__)
 
 ''',
     'backend/api/patient.py': '''"""患者端接口：报告、病历、主治医生、个人资料、AI 模型配置
@@ -429,7 +528,9 @@ def main():
     tree = ast.parse(''.join(lines))
     module_names = collect_module_names(tree)
 
-    fn_nodes = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
+    # 同时支持函数与类（Logger 等工具类需一并搬迁）
+    fn_nodes = {n.name: n for n in tree.body
+                if isinstance(n, (ast.FunctionDef, ast.ClassDef))}
     const_nodes = {}
     for n in tree.body:
         if isinstance(n, ast.Assign):

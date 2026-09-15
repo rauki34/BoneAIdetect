@@ -2,9 +2,11 @@
 
 从 app.py 抽出，供各蓝图共用。
 """
+import sys
+
 from flask import request
 
-from database import DetectionHistory, OperationLog, db
+from database import DetectionHistory, OperationLog, UserAIModel, db
 from utils.logger import logger
 
 # ==================== 操作日志接口（借鉴pear-admin-flask）====================
@@ -87,3 +89,53 @@ def get_filtered_reports(user):
     else:
         # 未知角色,返回空查询
         return DetectionHistory.query.filter(False)
+
+
+class Logger:
+    """日志记录器，同时输出到控制台和文件"""
+    def __init__(self, log_file):
+        self.log_file = log_file
+        self.terminal = sys.stdout
+        self.log = open(log_file, 'w', encoding='utf-8')
+        
+    def write(self, message):
+        self.terminal.write(message)
+        self.log.write(message)
+        self.log.flush()
+        
+    def flush(self):
+        self.terminal.flush()
+        self.log.flush()
+        
+    def close(self):
+        self.log.close()
+
+def save_user_ai_model(provider, model_id, api_key, api_url, username):
+    """保存用户AI模型配置"""
+    try:
+        # 查找是否已存在
+        existing = UserAIModel.query.filter_by(
+            provider=provider,
+            model_id=model_id,
+            created_by=username
+        ).first()
+        
+        if existing:
+            # 更新现有记录
+            existing.api_key = api_key
+            existing.api_url = api_url
+        else:
+            # 创建新记录
+            model = UserAIModel(
+                provider=provider,
+                model_id=model_id,
+                api_key=api_key,
+                api_url=api_url,
+                created_by=username
+            )
+            db.session.add(model)
+        
+        db.session.commit()
+    except Exception as e:
+        logger.error(f"保存用户AI模型失败: {e}")
+        db.session.rollback()
