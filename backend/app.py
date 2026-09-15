@@ -73,6 +73,12 @@ from core.state import (      # noqa: E402
     rate_limit_storage, rate_limit_lock, RATE_LIMIT_CONFIG,
     video_tasks, training_tasks, training_stop_flags,
 )
+from core.validators import (  # noqa: E402
+    validate_role, validate_username, validate_password,
+    validate_email, validate_phone, calculate_age,
+)
+from core.helpers import log_operation  # noqa: E402
+from core.captcha import check_captcha  # noqa: E402
 
 # 初始化数据库
 init_db(app)
@@ -247,116 +253,14 @@ def handle_unexpected_error(error):
     return jsonify(response), 500
 
 
-# ==================== 输入验证工具函数 ====================
-
-def validate_role(role):
-    """验证角色值的有效性
-    
-    Args:
-        role: 角色字符串
-    
-    Returns:
-        bool: 是否有效
-    
-    需求: 1.4
-    """
-    return role in ['admin', 'doctor', 'patient']
 
 
-def validate_username(username):
-    """验证用户名格式
-    
-    Args:
-        username: 用户名字符串
-    
-    Returns:
-        tuple: (是否有效, 错误消息)
-    
-    需求: 15.1
-    """
-    if not username:
-        return False, "用户名不能为空"
-    
-    if len(username) < 3:
-        return False, "用户名长度至少3个字符"
-    
-    if len(username) > 80:
-        return False, "用户名长度不能超过80个字符"
-    
-    # 只允许字母、数字、下划线
-    if not re.match(r'^[a-zA-Z0-9_]+$', username):
-        return False, "用户名只能包含字母、数字和下划线"
-    
-    return True, None
 
 
-def validate_password(password):
-    """验证密码格式
-    
-    Args:
-        password: 密码字符串
-    
-    Returns:
-        tuple: (是否有效, 错误消息)
-    
-    需求: 15.1
-    """
-    if not password:
-        return False, "密码不能为空"
-    
-    if len(password) < 6:
-        return False, "密码长度至少6个字符"
-    
-    if len(password) > 128:
-        return False, "密码长度不能超过128个字符"
-    
-    return True, None
 
 
-def validate_email(email):
-    """验证邮箱格式
-    
-    Args:
-        email: 邮箱字符串
-    
-    Returns:
-        tuple: (是否有效, 错误消息)
-    
-    需求: 15.1
-    """
-    if not email:
-        return True, None  # 邮箱是可选的
-    
-    email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
-    if not re.match(email_pattern, email):
-        return False, "邮箱格式不正确"
-    
-    if len(email) > 120:
-        return False, "邮箱长度不能超过120个字符"
-    
-    return True, None
 
 
-def validate_phone(phone):
-    """验证电话格式
-    
-    Args:
-        phone: 电话字符串
-    
-    Returns:
-        tuple: (是否有效, 错误消息)
-    
-    需求: 15.1
-    """
-    if not phone:
-        return True, None  # 电话是可选的
-    
-    # 中国手机号格式: 1开头,第二位是3-9,共11位
-    phone_pattern = r'^1[3-9]\d{9}$'
-    if not re.match(phone_pattern, phone):
-        return False, "电话格式不正确(请输入11位中国手机号)"
-    
-    return True, None
 
 
 # ==================== AI内容过滤 ====================
@@ -1933,44 +1837,6 @@ def user_stats():
     })
 
 
-# ==================== 操作日志接口（借鉴pear-admin-flask）====================
-
-def log_operation(description, success=True, error_msg=None):
-    """记录操作日志的辅助函数"""
-    try:
-        # 获取请求上下文中的信息
-        try:
-            username = request.headers.get('X-Username', 'anonymous') if request else 'system'
-            method = request.method if request else 'SYSTEM'
-            url = request.path if request else ''
-            ip = request.remote_addr if request else ''
-            user_agent = request.headers.get('User-Agent', '') if request else ''
-        except RuntimeError:
-            # 不在请求上下文中
-            username = 'system'
-            method = 'SYSTEM'
-            url = ''
-            ip = ''
-            user_agent = ''
-        
-        log = OperationLog(
-            username=username,
-            method=method,
-            url=url,
-            ip=ip,
-            user_agent=user_agent,
-            description=description,
-            success=success,
-            error_msg=error_msg
-        )
-        db.session.add(log)
-        db.session.commit()
-    except Exception as e:
-        logger.error(f"记录日志失败: {e}")
-        try:
-            db.session.rollback()
-        except:
-            pass
 
 
 @app.route("/api/logs", methods=["GET"])
@@ -2725,32 +2591,6 @@ def generate_captcha():
     return response
 
 
-def check_captcha(captcha, captcha_id):
-    """校验图形验证码
-
-    返回 (是否通过, 错误信息)。校验通过后立即销毁验证码，防止重放攻击。
-
-    验证码存于进程内 captcha_store（见 generate_captcha），5 分钟过期。
-    注意：多进程部署时该存储不共享，需改为 Redis 等外部存储。
-    """
-    if not captcha:
-        return False, "验证码不能为空"
-    if not captcha_id:
-        return False, "验证码ID不能为空"
-
-    data = captcha_store.get(captcha_id)
-    if not data:
-        return False, "验证码已过期"
-
-    if data['expire_time'] < time.time():
-        captcha_store.pop(captcha_id, None)
-        return False, "验证码已过期"
-
-    if captcha.upper() != data['code'].upper():
-        return False, "验证码错误"
-
-    captcha_store.pop(captcha_id, None)   # 一次性使用
-    return True, None
 
 
 @app.route("/api/captcha/verify", methods=["POST"])
@@ -4730,15 +4570,6 @@ def get_doctor_dashboard():
     })
 
 
-def calculate_age(birth_date):
-    """计算年龄"""
-    if not birth_date:
-        return 0
-    today = datetime.today()
-    age = today.year - birth_date.year
-    if today.month < birth_date.month or (today.month == birth_date.month and today.day < birth_date.day):
-        age -= 1
-    return age
 
 
 @app.route("/api/doctor/patients", methods=["POST"])
