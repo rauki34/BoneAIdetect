@@ -10,6 +10,7 @@ import optuna
 from ultralytics import YOLO
 import torch
 
+from utils.logger import logger
 # 添加当前目录到Python路径
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
@@ -124,10 +125,10 @@ class HyperparameterOptimizer:
             'split': 'val',
         }
         
-        print(f"\n{'='*80}")
-        print(f"开始Trial {trial.number}")
-        print(f"参数: {params}")
-        print(f"{'='*80}")
+        logger.info(f"\n{'='*80}")
+        logger.info(f"开始Trial {trial.number}")
+        logger.info(f"参数: {params}")
+        logger.info(f"{'='*80}")
         
         # 开始训练
         results = model.train(**train_args)
@@ -136,11 +137,11 @@ class HyperparameterOptimizer:
         if hasattr(results, 'metrics'):
             metrics = results.metrics
             map50 = metrics.get('metrics/mAP50(B)', 0.0)
-            print(f"Trial {trial.number} - mAP50: {map50:.4f}")
+            logger.info(f"Trial {trial.number} - mAP50: {map50:.4f}")
             return map50
         else:
             # 如果无法获取指标，返回0
-            print(f"Trial {trial.number} - 无法获取指标")
+            logger.info(f"Trial {trial.number} - 无法获取指标")
             return 0.0
     
     def optimize(self):
@@ -161,12 +162,12 @@ class HyperparameterOptimizer:
         study.optimize(self.objective, n_trials=self.max_trials)
         
         # 打印结果
-        print(f"\n{'='*80}")
-        print("超参数优化完成")
-        print(f"最佳Trial: {study.best_trial.number}")
-        print(f"最佳mAP50: {study.best_value:.4f}")
-        print(f"最佳参数: {study.best_params}")
-        print(f"{'='*80}")
+        logger.info(f"\n{'='*80}")
+        logger.info("超参数优化完成")
+        logger.info(f"最佳Trial: {study.best_trial.number}")
+        logger.info(f"最佳mAP50: {study.best_value:.4f}")
+        logger.info(f"最佳参数: {study.best_params}")
+        logger.info(f"{'='*80}")
         
         return study.best_params
 
@@ -200,4 +201,4 @@ if __name__ == "__main__":
     with open(os.path.join(args.output, filename), 'w') as f:
         json.dump(best_params, f, indent=2)
     
-    print(f"最佳参数已保存到: {os.path.join(args.output, filename)}")
+    logger.info(f"最佳参数已保存到: {os.path.join(args.output, filename)}")

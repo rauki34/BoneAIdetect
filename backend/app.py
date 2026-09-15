@@ -15,6 +15,7 @@ from collections import defaultdict
 from threading import Lock
 from sqlalchemy import func
 
+from utils.logger import logger
 # 内存存储验证码: {captcha_id: {'code': 'ABC1', 'expire_time': timestamp}}
 captcha_store = {}
 CAPTCHA_TIMEOUT = 300  # 5分钟过期
@@ -98,11 +99,11 @@ def load_models():
         if os.path.exists(path):
             try:
                 loaded[name] = YOLO(path)
-                print(f"Loaded model {name} from {path}")
+                logger.info(f"Loaded model {name} from {path}")
             except Exception as e:
-                print(f"Failed to load model {name} from {path}: {e}")
+                logger.error(f"Failed to load model {name} from {path}: {e}")
         else:
-            print(f"Model file for {name} not found at {path}, skipping")
+            logger.info(f"Model file for {name} not found at {path}, skipping")
     return loaded
 
 
@@ -717,13 +718,13 @@ def login():
     if is_hashed:
         # 已哈希的密码
         if not check_password_hash(user.password, password):
-            print(f"登录失败: 用户 {username} 密码验证失败（已哈希密码）")
+            logger.info(f"登录失败: 用户 {username} 密码验证失败（已哈希密码）")
             log_operation(f"登录失败:密码错误-{username}", success=False, error_msg="密码错误")
             return jsonify({"error": "密码错误"}), 401
     else:
         # 未哈希的密码（兼容旧数据）
         if user.password != password:
-            print(f"登录失败: 用户 {username} 密码验证失败（未哈希密码）")
+            logger.info(f"登录失败: 用户 {username} 密码验证失败（未哈希密码）")
             log_operation(f"登录失败:密码错误-{username}", success=False, error_msg="密码错误")
             return jsonify({"error": "密码错误"}), 401
     
@@ -735,7 +736,7 @@ def login():
     }
     redirect_url = redirect_urls.get(user.role, '/patient')  # 默认重定向到patient页面
     
-    print(f"登录成功: 用户 {username}, 角色 {user.role}")
+    logger.info(f"登录成功: 用户 {username}, 角色 {user.role}")
     log_operation(f"用户登录:{username}")
     return jsonify({
         "success": True,
@@ -799,7 +800,7 @@ def register():
     
     # 从内存存储获取验证码
     captcha_data = captcha_store.get(captcha_id)
-    print(f"[DEBUG] 验证验证码 - 用户输入: {captcha}, captcha_id: {captcha_id}, 存储数据: {captcha_data}")
+    logger.debug(f"[DEBUG] 验证验证码 - 用户输入: {captcha}, captcha_id: {captcha_id}, 存储数据: {captcha_data}")
     
     if not captcha_data:
         return jsonify({"error": "验证码已过期"}), 400
@@ -898,9 +899,9 @@ def predict():
         if candidate_path and os.path.exists(candidate_path):
             try:
                 models[model_name] = YOLO(candidate_path)
-                print(f"Dynamically loaded system model {model_name} from {candidate_path}")
+                logger.info(f"Dynamically loaded system model {model_name} from {candidate_path}")
             except Exception as e:
-                print(f"Failed to dynamically load system model {model_name}: {e}")
+                logger.error(f"Failed to dynamically load system model {model_name}: {e}")
                 return jsonify({"error": f"加载系统模型失败: {str(e)}"}), 500
         else:
             # 检查是否是自定义模型（从数据库加载）
@@ -908,15 +909,15 @@ def predict():
             if custom_model and os.path.exists(custom_model.model_path):
                 try:
                     models[model_name] = YOLO(custom_model.model_path)
-                    print(f"Dynamically loaded custom model {model_name} from {custom_model.model_path}")
+                    logger.info(f"Dynamically loaded custom model {model_name} from {custom_model.model_path}")
                 except Exception as e:
-                    print(f"Failed to dynamically load custom model {model_name}: {e}")
+                    logger.error(f"Failed to dynamically load custom model {model_name}: {e}")
                     return jsonify({"error": f"加载自定义模型失败: {str(e)}"}), 500
             else:
-                print(f"Requested model '{model_name}' not available. Available: {list(models.keys())}")
+                logger.info(f"Requested model '{model_name}' not available. Available: {list(models.keys())}")
                 return jsonify({"error": "模型不存在", "available_models": list(models.keys())}), 400
     model = models[model_name]
-    print(f"Using model: {model_name}")
+    logger.info(f"Using model: {model_name}")
     results = model(img_path)
     result = results[0]
 
@@ -1341,7 +1342,7 @@ def save_user_ai_model(provider, model_id, api_key, api_url, username):
         
         db.session.commit()
     except Exception as e:
-        print(f"保存用户AI模型失败: {e}")
+        logger.error(f"保存用户AI模型失败: {e}")
         db.session.rollback()
 
 
@@ -1698,7 +1699,7 @@ def generate_ai_advice_async(history_id, detections):
             elif provider == 'modelscope':
                 reply = call_modelscope_api(prompt, ai_config['api_key'], ai_config['model'], None)
             else:
-                print(f"未知的AI服务提供商: {provider}")
+                logger.info(f"未知的AI服务提供商: {provider}")
                 return
             
             # 构建医疗建议数据
@@ -1732,12 +1733,12 @@ def generate_ai_advice_async(history_id, detections):
                 if history:
                     history.medical_advice = json.dumps(medical_advice, ensure_ascii=False)
                     db.session.commit()
-                    print(f"AI建议生成成功: history_id={history_id}")
+                    logger.info(f"AI建议生成成功: history_id={history_id}")
                 else:
-                    print(f"历史记录不存在: history_id={history_id}")
+                    logger.info(f"历史记录不存在: history_id={history_id}")
                     
         except Exception as e:
-            print(f"生成AI建议失败: history_id={history_id}, error={e}")
+            logger.error(f"生成AI建议失败: history_id={history_id}, error={e}")
     
     # 启动后台线程
     thread = threading.Thread(target=generate_advice)
@@ -1961,8 +1962,8 @@ def interpret_detection():
         return jsonify({"error": "AI 服务响应超时"}), 504
     except Exception as e:
         import traceback
-        print(f"AI解读接口错误: {str(e)}")
-        print(traceback.format_exc())
+        logger.error(f"AI解读接口错误: {str(e)}")
+        logger.error(traceback.format_exc())
         return jsonify({"error": str(e)}), 500
 
 
@@ -2107,7 +2108,7 @@ def log_operation(description, success=True, error_msg=None):
         db.session.add(log)
         db.session.commit()
     except Exception as e:
-        print(f"记录日志失败: {e}")
+        logger.error(f"记录日志失败: {e}")
         try:
             db.session.rollback()
         except:
@@ -2343,7 +2344,7 @@ def upload_dataset():
                         for ext in ['*.jpg', '*.jpeg', '*.png', '*.bmp']:
                             num_images += len(glob.glob(os.path.join(train_dir, '**', ext), recursive=True))
             except Exception as e:
-                print(f"解析数据集配置失败: {e}")
+                logger.error(f"解析数据集配置失败: {e}")
         
         # 计算数据集大小
         total_size = 0
@@ -2424,7 +2425,7 @@ def delete_dataset(dataset_id):
             import shutil
             shutil.rmtree(dataset.dataset_path)
     except Exception as e:
-        print(f"删除数据集目录失败: {e}")
+        logger.error(f"删除数据集目录失败: {e}")
     
     # 删除数据库记录
     name = dataset.name
@@ -2487,7 +2488,7 @@ def video_detect():
         if candidate_path and os.path.exists(candidate_path):
             try:
                 models[model_name] = YOLO(candidate_path)
-                print(f"Video detect: Dynamically loaded system model {model_name}")
+                logger.info(f"Video detect: Dynamically loaded system model {model_name}")
             except Exception as e:
                 return jsonify({"error": f"加载系统模型失败: {str(e)}"}), 500
         else:
@@ -2496,7 +2497,7 @@ def video_detect():
             if custom_model and os.path.exists(custom_model.model_path):
                 try:
                     models[model_name] = YOLO(custom_model.model_path)
-                    print(f"Video detect: Dynamically loaded custom model {model_name}")
+                    logger.info(f"Video detect: Dynamically loaded custom model {model_name}")
                 except Exception as e:
                     return jsonify({"error": f"加载自定义模型失败: {str(e)}"}), 500
             else:
@@ -2668,7 +2669,7 @@ def process_video_stream(task_id, video_path, model_name, username):
         log_operation(f"视频流检测完成:{task_id},共{frame_count}帧")
         
     except Exception as e:
-        print(f"视频处理错误: {e}")
+        logger.error(f"视频处理错误: {e}")
         video_tasks[task_id]['status'] = 'error'
         error_message = {'type': 'error', 'message': str(e)}
         for client in list(video_tasks[task_id].get('clients', [])):
@@ -2724,7 +2725,7 @@ def camera_detect():
         if candidate_path and os.path.exists(candidate_path):
             try:
                 models[model_name] = YOLO(candidate_path)
-                print(f"Camera detect: Dynamically loaded system model {model_name}")
+                logger.info(f"Camera detect: Dynamically loaded system model {model_name}")
             except Exception as e:
                 return jsonify({"error": f"加载系统模型失败: {str(e)}"}), 500
         else:
@@ -2733,7 +2734,7 @@ def camera_detect():
             if custom_model and os.path.exists(custom_model.model_path):
                 try:
                     models[model_name] = YOLO(custom_model.model_path)
-                    print(f"Camera detect: Dynamically loaded custom model {model_name}")
+                    logger.info(f"Camera detect: Dynamically loaded custom model {model_name}")
                 except Exception as e:
                     return jsonify({"error": f"加载自定义模型失败: {str(e)}"}), 500
             else:
@@ -2788,7 +2789,7 @@ def camera_detect():
         })
         
     except Exception as e:
-        print(f"摄像头检测错误: {e}")
+        logger.error(f"摄像头检测错误: {e}")
         return jsonify({"error": str(e)}), 500
 
 
@@ -2815,7 +2816,7 @@ def generate_captcha():
     for k in expired_keys:
         del captcha_store[k]
     
-    print(f"[DEBUG] 生成验证码: {captcha_text}, captcha_id: {captcha_id}")
+    logger.debug(f"[DEBUG] 生成验证码: {captcha_text}, captcha_id: {captcha_id}")
     
     # 创建验证码图像
     width, height = 120, 40
@@ -2991,9 +2992,9 @@ def train_model():
         dataset_source = request.form.get('dataset_source', 'upload')
         use_best_hyperparams = request.form.get('use_best_hyperparams', 'false').lower() == 'true'
         
-        print(f"[DEBUG] 训练请求参数: name={model_name}, base_model={base_model}, dataset_source={dataset_source}")
-        print(f"[DEBUG] Form data: {dict(request.form)}")
-        print(f"[DEBUG] Files: {list(request.files.keys())}")
+        logger.debug(f"[DEBUG] 训练请求参数: name={model_name}, base_model={base_model}, dataset_source={dataset_source}")
+        logger.debug(f"[DEBUG] Form data: {dict(request.form)}")
+        logger.debug(f"[DEBUG] Files: {list(request.files.keys())}")
     except Exception as e:
         return jsonify({"error": f"参数解析错误: {str(e)}"}), 400
 
@@ -3069,7 +3070,7 @@ def train_model():
         # 检查是否在已加载的models中，如果没有则尝试自动下载加载
         if base_model not in models:
             try:
-                print(f"基础模型 {base_model} 未加载，尝试自动下载...")
+                logger.info(f"基础模型 {base_model} 未加载，尝试自动下载...")
                 from ultralytics import YOLO
                 import shutil
                 
@@ -3079,7 +3080,7 @@ def train_model():
                 if os.path.exists(model_path):
                     # 如果 models 目录已存在，直接加载
                     models[base_model] = YOLO(model_path)
-                    print(f"✓ 从 models 目录加载模型 {base_model}")
+                    logger.info(f"✓ 从 models 目录加载模型 {base_model}")
                 else:
                     # 下载到当前目录，然后移动到 models 目录
                     model_file = f"{base_model}.pt"
@@ -3096,11 +3097,11 @@ def train_model():
                     # 移动到 models 目录
                     if os.path.exists(downloaded_path):
                         shutil.move(downloaded_path, model_path)
-                        print(f"✓ 模型已移动到 {model_path}")
+                        logger.info(f"✓ 模型已移动到 {model_path}")
                     
                     # 重新从 models 目录加载
                     models[base_model] = YOLO(model_path)
-                    print(f"✓ 成功下载并加载模型 {base_model}")
+                    logger.info(f"✓ 成功下载并加载模型 {base_model}")
             except Exception as e:
                 return jsonify({"error": f"基础模型 {base_model} 加载失败: {str(e)}"}), 400
         actual_base_model = base_model
@@ -3563,7 +3564,7 @@ def disable_model(model_id):
     # 从内存中移除模型
     if model.model_key in models:
         del models[model.model_key]
-        print(f"模型 {model.model_key} 已从内存中移除")
+        logger.info(f"模型 {model.model_key} 已从内存中移除")
     
     log_operation(f"禁用模型:{model.name}")
     
@@ -3596,9 +3597,9 @@ def enable_model(model_id):
     try:
         if model.model_key not in models:
             models[model.model_key] = YOLO(model.model_path)
-            print(f"模型 {model.model_key} 已加载到内存")
+            logger.info(f"模型 {model.model_key} 已加载到内存")
     except Exception as e:
-        print(f"加载模型到内存失败: {e}")
+        logger.error(f"加载模型到内存失败: {e}")
         # 不影响启用操作，下次预测时会尝试加载
     
     log_operation(f"启用模型:{model.name}")
@@ -4424,7 +4425,7 @@ def patient_register():
         
     except Exception as e:
         db.session.rollback()
-        print(f"患者注册失败: {e}")
+        logger.error(f"患者注册失败: {e}")
         return jsonify({"error": "注册失败，请稍后重试"}), 500
 
 
@@ -4495,7 +4496,7 @@ def doctor_register():
         
     except Exception as e:
         db.session.rollback()
-        print(f"医生申请失败: {e}")
+        logger.error(f"医生申请失败: {e}")
         return jsonify({"error": "提交失败，请稍后重试"}), 500
 
 
@@ -4732,7 +4733,7 @@ def update_patient_profile():
         
     except Exception as e:
         db.session.rollback()
-        print(f"更新患者信息失败: {e}")
+        logger.error(f"更新患者信息失败: {e}")
         return jsonify({"error": "更新失败"}), 500
 
 
@@ -4916,7 +4917,7 @@ def doctor_add_patient():
         
     except Exception as e:
         db.session.rollback()
-        print(f"添加患者失败: {e}")
+        logger.error(f"添加患者失败: {e}")
         return jsonify({"error": "添加失败"}), 500
 
 
@@ -4950,7 +4951,7 @@ def archive_patient(patient_id):
         
     except Exception as e:
         db.session.rollback()
-        print(f"归档患者失败: {e}")
+        logger.error(f"归档患者失败: {e}")
         return jsonify({"error": "操作失败"}), 500
 
 
@@ -4978,7 +4979,7 @@ def get_all_patients():
             "patients": patient_list
         })
     except Exception as e:
-        print(f"获取患者列表失败: {e}")
+        logger.error(f"获取患者列表失败: {e}")
         return jsonify({"error": "获取失败"}), 500
 
 
@@ -5041,7 +5042,7 @@ def doctor_create_record():
         
     except Exception as e:
         db.session.rollback()
-        print(f"创建病历失败: {e}")
+        logger.error(f"创建病历失败: {e}")
         return jsonify({"error": "创建失败"}), 500
 
 
@@ -5077,7 +5078,7 @@ def doctor_update_record(record_id):
         
     except Exception as e:
         db.session.rollback()
-        print(f"更新病历失败: {e}")
+        logger.error(f"更新病历失败: {e}")
         return jsonify({"error": "更新失败"}), 500
 
 
@@ -5137,8 +5138,8 @@ def get_admin_dashboard():
         })
     except Exception as e:
         import traceback
-        print(f"Dashboard API Error: {str(e)}")
-        print(traceback.format_exc())
+        logger.error(f"Dashboard API Error: {str(e)}")
+        logger.error(traceback.format_exc())
         return jsonify({"error": str(e)}), 500
 
 
@@ -5203,7 +5204,7 @@ def approve_doctor_registration(registration_id):
         
     except Exception as e:
         db.session.rollback()
-        print(f"审核失败: {e}")
+        logger.error(f"审核失败: {e}")
         return jsonify({"error": "审核失败"}), 500
 
 
@@ -5287,7 +5288,7 @@ def update_profile():
         
     except Exception as e:
         db.session.rollback()
-        print(f"更新个人信息失败: {e}")
+        logger.error(f"更新个人信息失败: {e}")
         return jsonify({"error": "更新失败"}), 500
 
 
@@ -5342,8 +5343,8 @@ def get_admin_statistics():
         })
     except Exception as e:
         import traceback
-        print(f"Statistics API Error: {str(e)}")
-        print(traceback.format_exc())
+        logger.error(f"Statistics API Error: {str(e)}")
+        logger.error(traceback.format_exc())
         return jsonify({"error": str(e)}), 500
 
 
@@ -5400,7 +5401,7 @@ def get_admin_statistics_detailed():
                 end = datetime.strptime(end_date, '%Y-%m-%d') + timedelta(days=1)
                 query = query.filter(DetectionHistory.timestamp >= start, DetectionHistory.timestamp < end)
             except Exception as e:
-                print(f"日期解析错误: {e}")
+                logger.error(f"日期解析错误: {e}")
         
         detections = query.all()
         total_detections = len(detections)
@@ -5426,7 +5427,7 @@ def get_admin_statistics_detailed():
                     cls = det.get('class', 'unknown')
                     classes_detected[cls] = classes_detected.get(cls, 0) + 1
             except Exception as e:
-                print(f"解析检测数据错误: {e}")
+                logger.error(f"解析检测数据错误: {e}")
         
         # 计算日均检测数
         avg_daily = 0
@@ -5450,7 +5451,7 @@ def get_admin_statistics_detailed():
             'daily_detections': daily_detections
         })
     except Exception as e:
-        print(f"获取详细统计数据错误: {e}")
+        logger.error(f"获取详细统计数据错误: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({
@@ -5567,7 +5568,7 @@ def generate_test_data():
         
     except Exception as e:
         db.session.rollback()
-        print(f"生成测试数据错误: {e}")
+        logger.error(f"生成测试数据错误: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({
@@ -5657,7 +5658,7 @@ def admin_update_user(user_id):
         
     except Exception as e:
         db.session.rollback()
-        print(f"更新用户信息失败: {e}")
+        logger.error(f"更新用户信息失败: {e}")
         return jsonify({"error": "更新失败"}), 500
 
 
@@ -5698,7 +5699,7 @@ def admin_reset_password(user_id):
         
     except Exception as e:
         db.session.rollback()
-        print(f"重置密码失败: {e}")
+        logger.error(f"重置密码失败: {e}")
         return jsonify({"error": "密码重置失败"}), 500
 
 
@@ -5770,7 +5771,7 @@ def forgot_password_reset():
         })
     except Exception as e:
         db.session.rollback()
-        print(f"重置密码失败: {e}")
+        logger.error(f"重置密码失败: {e}")
         return jsonify({"error": "重置失败"}), 500
 
 
@@ -5838,7 +5839,7 @@ def send_message():
         })
     except Exception as e:
         db.session.rollback()
-        print(f"发送消息失败: {e}")
+        logger.error(f"发送消息失败: {e}")
         return jsonify({"error": "发送失败"}), 500
 
 
@@ -5997,7 +5998,7 @@ def mark_messages_read():
         })
     except Exception as e:
         db.session.rollback()
-        print(f"标记已读失败: {e}")
+        logger.error(f"标记已读失败: {e}")
         return jsonify({"error": "操作失败"}), 500
 
 
@@ -6018,7 +6019,7 @@ def get_admin_announcements():
             "announcements": [a.to_dict() for a in announcements]
         })
     except Exception as e:
-        print(f"获取公告列表失败: {e}")
+        logger.error(f"获取公告列表失败: {e}")
         return jsonify({"error": "获取失败"}), 500
 
 
@@ -6058,7 +6059,7 @@ def create_announcement():
         })
     except Exception as e:
         db.session.rollback()
-        print(f"创建公告失败: {e}")
+        logger.error(f"创建公告失败: {e}")
         return jsonify({"error": "发布失败"}), 500
 
 
@@ -6097,7 +6098,7 @@ def update_announcement(announcement_id):
         })
     except Exception as e:
         db.session.rollback()
-        print(f"更新公告失败: {e}")
+        logger.error(f"更新公告失败: {e}")
         return jsonify({"error": "更新失败"}), 500
 
 
@@ -6125,7 +6126,7 @@ def delete_announcement(announcement_id):
         })
     except Exception as e:
         db.session.rollback()
-        print(f"删除公告失败: {e}")
+        logger.error(f"删除公告失败: {e}")
         return jsonify({"error": "删除失败"}), 500
 
 
@@ -6163,7 +6164,7 @@ def get_announcements():
             "announcements": result
         })
     except Exception as e:
-        print(f"获取公告失败: {e}")
+        logger.error(f"获取公告失败: {e}")
         return jsonify({"error": "获取失败"}), 500
 
 
@@ -6194,7 +6195,7 @@ def mark_announcement_read(announcement_id):
         })
     except Exception as e:
         db.session.rollback()
-        print(f"标记已读失败: {e}")
+        logger.error(f"标记已读失败: {e}")
         return jsonify({"error": "操作失败"}), 500
 
 
@@ -6228,7 +6229,7 @@ def get_unread_announcement_count():
             "unread_count": unread_count
         })
     except Exception as e:
-        print(f"获取未读公告数失败: {e}")
+        logger.error(f"获取未读公告数失败: {e}")
         return jsonify({"error": "获取失败"}), 500
 
 
@@ -6323,7 +6324,7 @@ def ai_assistant_chat():
         
     except Exception as e:
         db.session.rollback()
-        print(f"AI助手对话失败: {e}")
+        logger.error(f"AI助手对话失败: {e}")
         return jsonify({"success": False, "error": "AI服务暂时不可用，请稍后再试"}), 503
 
 
@@ -6360,7 +6361,7 @@ def ai_assistant_history():
         })
         
     except Exception as e:
-        print(f"获取对话历史失败: {e}")
+        logger.error(f"获取对话历史失败: {e}")
         return jsonify({"success": False, "error": "获取历史记录失败"}), 500
 
 
@@ -6405,7 +6406,7 @@ def ai_assistant_sessions():
         })
         
     except Exception as e:
-        print(f"获取会话列表失败: {e}")
+        logger.error(f"获取会话列表失败: {e}")
         return jsonify({"success": False, "error": "获取会话列表失败"}), 500
 
 
@@ -6437,11 +6438,11 @@ def call_ai_assistant_api(messages):
             return call_modelscope_assistant(messages, api_key, model)
         else:
             # 未知提供商，使用模拟回复
-            print(f"未知的AI服务提供商: {provider}，使用模拟回复")
+            logger.info(f"未知的AI服务提供商: {provider}，使用模拟回复")
             return get_mock_reply(messages)
             
     except Exception as e:
-        print(f"AI服务调用失败: {e}")
+        logger.error(f"AI服务调用失败: {e}")
         return get_mock_reply(messages)
 
 
@@ -6474,7 +6475,7 @@ def call_local_ai_assistant(messages):
         else:
             raise Exception(f"本地AI服务响应失败: {response.text}")
     except Exception as e:
-        print(f"本地AI服务调用失败: {e}")
+        logger.error(f"本地AI服务调用失败: {e}")
         return get_mock_reply(messages)
 
 
@@ -6506,7 +6507,7 @@ def call_openai_assistant(messages, api_key, model='gpt-4'):
         else:
             raise Exception(f"OpenAI API调用失败: {response.text}")
     except Exception as e:
-        print(f"OpenAI API调用失败: {e}")
+        logger.error(f"OpenAI API调用失败: {e}")
         return get_mock_reply(messages)
 
 
@@ -6546,7 +6547,7 @@ def call_custom_assistant(messages, api_url, api_key, model='gpt-4'):
         else:
             raise Exception(f"自定义API调用失败: {response.text}")
     except Exception as e:
-        print(f"自定义API调用失败: {e}")
+        logger.error(f"自定义API调用失败: {e}")
         return get_mock_reply(messages)
 
 
@@ -6582,7 +6583,7 @@ def call_modelscope_assistant(messages, api_key, model):
         else:
             raise Exception(f"ModelScope API调用失败: {response.status_code} - {response.text}")
     except Exception as e:
-        print(f"ModelScope API调用失败: {e}")
+        logger.error(f"ModelScope API调用失败: {e}")
         return get_mock_reply(messages)
 
 

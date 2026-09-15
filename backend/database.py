@@ -5,6 +5,7 @@ from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime, timedelta
 import json
 
+from utils.logger import logger
 db = SQLAlchemy()
 
 # 时区偏移（中国时区 UTC+8）
@@ -845,7 +846,7 @@ def init_db(app):
     with app.app_context():
         # 创建所有表
         db.create_all()
-        print("✅ 数据库表已创建")
+        logger.info("✅ 数据库表已创建")
         
         # 初始化默认admin用户（如果不存在）
         admin_user = User.query.filter_by(username='admin').first()
@@ -857,7 +858,7 @@ def init_db(app):
             )
             db.session.add(admin_user)
             db.session.commit()
-            print("✅ 默认admin用户已创建（用户名: admin, 密码: 123456）")
+            logger.info("✅ 默认admin用户已创建（用户名: admin, 密码: 123456）")
         else:
             # 如果admin用户存在但密码未加密，更新密码
             if not (admin_user.password.startswith('$2b$') or 
@@ -865,10 +866,10 @@ def init_db(app):
                     admin_user.password.startswith('pbkdf2:') or
                     admin_user.password.startswith('scrypt:') or
                     admin_user.password.startswith('argon2:')):
-                print("⚠️  检测到admin用户密码未加密，正在更新...")
+                logger.info("⚠️  检测到admin用户密码未加密，正在更新...")
                 admin_user.password = generate_password_hash('123456')
                 db.session.commit()
-                print("✅ admin用户密码已更新（密码: 123456）")
+                logger.info("✅ admin用户密码已更新（密码: 123456）")
         
         # 初始化默认系统设置
         if not SystemSettings.query.filter_by(key='default_model').first():
@@ -879,7 +880,7 @@ def init_db(app):
             for setting in default_settings:
                 db.session.add(setting)
             db.session.commit()
-            print("✅ 系统设置已初始化")
+            logger.info("✅ 系统设置已初始化")
 
 
 def migrate_from_json(app):
@@ -913,9 +914,9 @@ def migrate_from_json(app):
                         )
                         db.session.add(user)
                 db.session.commit()
-                print(f"✅ 已迁移 {len(users_data)} 个用户到数据库")
+                logger.info(f"✅ 已迁移 {len(users_data)} 个用户到数据库")
             except Exception as e:
-                print(f"❌ 迁移用户数据失败: {e}")
+                logger.error(f"❌ 迁移用户数据失败: {e}")
                 db.session.rollback()
         
         # 确保admin用户存在（在迁移后再次检查）
@@ -928,7 +929,7 @@ def migrate_from_json(app):
             )
             db.session.add(admin_user)
             db.session.commit()
-            print("✅ 默认admin用户已创建（用户名: admin, 密码: 123456）")
+            logger.info("✅ 默认admin用户已创建（用户名: admin, 密码: 123456）")
         
         # 迁移检测历史
         history_json = 'detection_history.json'
@@ -948,7 +949,7 @@ def migrate_from_json(app):
                         )
                         db.session.add(history)
                 db.session.commit()
-                print(f"✅ 已迁移 {len(history_data)} 条检测历史到数据库")
+                logger.info(f"✅ 已迁移 {len(history_data)} 条检测历史到数据库")
             except Exception as e:
-                print(f"❌ 迁移历史记录失败: {e}")
+                logger.error(f"❌ 迁移历史记录失败: {e}")
                 db.session.rollback()

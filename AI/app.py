@@ -1,8 +1,16 @@
 # app.py
+import logging
 from flask import Flask, request, jsonify
 from PIL import Image
 import torch, base64, io, json
 from transformers import AutoModelForImageTextToText, AutoTokenizer
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(name)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S',
+)
+logger = logging.getLogger('ai-service')
 
 app = Flask(__name__)
 
@@ -11,11 +19,11 @@ model_path = r"D:\grauateDesign\AI\Qwen3-VL-4B-Instruct"
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 if torch.cuda.is_available():
-    print("使用 GPU 进行推理")
+    logger.info("使用 GPU 进行推理")
     # 尝试使用4-bit量化加载（更节省显存）
     try:
         from transformers import BitsAndBytesConfig
-        print("正在使用 4-bit 量化加载模型...")
+        logger.info("正在使用 4-bit 量化加载模型...")
         
         # 配置4-bit量化，启用CPU offload
         quantization_config = BitsAndBytesConfig(
@@ -37,9 +45,9 @@ if torch.cuda.is_available():
             trust_remote_code=True,
             low_cpu_mem_usage=True
         )
-        print("4-bit 量化模型加载完成！")
+        logger.info("4-bit 量化模型加载完成！")
     except Exception as e:
-        print(f"4-bit量化加载失败，使用默认float16: {e}")
+        logger.error("4-bit量化加载失败，使用默认float16: %s", e)
         tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
         model = AutoModelForImageTextToText.from_pretrained(
             model_path,
@@ -47,9 +55,9 @@ if torch.cuda.is_available():
             device_map="auto",
             trust_remote_code=True
         )
-        print("模型加载完成！")
+        logger.info("模型加载完成！")
 else:
-    print("使用 CPU 进行推理，可能较慢")
+    logger.info("使用 CPU 进行推理，可能较慢")
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
     model = AutoModelForImageTextToText.from_pretrained(
         model_path,
@@ -57,7 +65,7 @@ else:
         device_map="auto",
         trust_remote_code=True
     )
-    print("模型加载完成！")
+    logger.info("模型加载完成！")
 
 @app.route("/")
 def index():
@@ -65,17 +73,19 @@ def index():
 
 @app.route("/chat", methods=["POST"])
 def chat():
-    # ===== 2. 调试：先打印原始请求 =====
-    print("Headers:", request.headers)
-    print("Body raw:", request.get_data(as_text=True))
+    # ===== 2. 调试：记录请求元信息 =====
+    # 注意：请求体含 base64 图像，可能达数 MB，只记录长度不转储内容
+    logger.debug("Headers: %s", request.headers)
+    logger.debug("请求体长度: %d 字符", len(request.get_data(as_text=True)))
 
     # ===== 3. 解析 JSON =====
     try:
         data = request.get_json(force=True)
     except Exception as e:
+        logger.error("JSON 解析失败: %s", e)
         return jsonify(error="JSON 解析失败", detail=str(e)), 400
 
-    print("解析后 data:", data)
+    logger.debug("解析后字段: %s", list(data.keys()))
     prompt = data.get("prompt", "")
     b64_img = data.get("image", None)
     if not prompt:
