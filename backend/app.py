@@ -45,7 +45,7 @@ jwt = JWTManager(app)           # JWT 认证（密钥与有效期来自 config.p
 # 各业务域的实现已拆至 core/（通用能力）、services/（服务层）、api/（路由蓝图）
 from core.paths import MODEL_CANDIDATES  # noqa: E402,F401
 from core.state import (  # noqa: E402,F401
-    CAPTCHA_TIMEOUT, RATE_LIMIT_CONFIG, captcha_store, init_models,
+    RATE_LIMIT_CONFIG, init_models,
     load_models, models, rate_limit_lock, rate_limit_storage,
     training_stop_flags, training_tasks, video_tasks,
 )

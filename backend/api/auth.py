@@ -14,10 +14,9 @@ from PIL import Image, ImageDraw, ImageFont
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from core.auth import get_current_user, require_auth
-from core.captcha import check_captcha
+from core.captcha import check_captcha, save_captcha
 from core.helpers import log_operation
 from core.ratelimit import limit
-from core.state import CAPTCHA_TIMEOUT, captcha_store
 from core.validators import (
     validate_email, validate_password, validate_phone,
     validate_role, validate_username,
@@ -241,18 +240,9 @@ def generate_captcha():
     # 生成唯一验证码ID
     captcha_id = "".join([random.choice("0123456789ABCDEFGHJKLMNPQRSTUVWXYZ") for _ in range(16)])
     
-    # 保存到内存存储
-    captcha_store[captcha_id] = {
-        'code': captcha_text,
-        'expire_time': time.time() + CAPTCHA_TIMEOUT
-    }
-    
-    # 清理过期验证码
-    current_time = time.time()
-    expired_keys = [k for k, v in captcha_store.items() if v['expire_time'] < current_time]
-    for k in expired_keys:
-        del captcha_store[k]
-    
+    # 保存验证码（Redis 优先，不可用时降级进程内；过期清理由存储层负责）
+    save_captcha(captcha_id, captcha_text)
+
     logger.debug(f"[DEBUG] 生成验证码: {captcha_text}, captcha_id: {captcha_id}")
     
     # 创建验证码图像
@@ -331,20 +321,11 @@ def forgot_password_verify():
     captcha = data.get("captcha", "").strip().upper()
     captcha_id = data.get("captcha_id", "").strip()
     
-    # 验证验证码
-    if not captcha_id or not captcha:
-        return jsonify({"error": "请输入验证码"}), 400
-    
-    captcha_data = captcha_store.get(captcha_id)
-    if not captcha_data or captcha_data['expire_time'] < time.time():
-        return jsonify({"error": "验证码已过期"}), 400
-    
-    if captcha != captcha_data['code'].upper():
-        return jsonify({"error": "验证码错误"}), 400
-    
-    # 删除已使用的验证码
-    del captcha_store[captcha_id]
-    
+    # 验证验证码（复用公共实现，此前这里是第三份重复代码）
+    ok, error = check_captcha(captcha, captcha_id)
+    if not ok:
+        return jsonify({"error": error}), 400
+
     # 查找用户
     user = User.query.filter_by(username=username).first()
     if not user:

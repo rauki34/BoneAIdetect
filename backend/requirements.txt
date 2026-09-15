@@ -11,6 +11,9 @@ Flask-JWT-Extended==4.7.1
 Werkzeug==3.1.4
 flask-sock==0.7.0
 
+# ==================== Cache / Queue ====================
+redis==8.1.0
+
 # ==================== Database ====================
 SQLAlchemy==2.0.45
 alembic==1.18.1

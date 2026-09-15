@@ -55,6 +55,10 @@ class Config:
         'http://localhost:5173,http://127.0.0.1:5173'
     ).split(',')
 
+    # ---------- 缓存 ----------
+    # 限流计数、验证码等；不可用时各模块自动降级为进程内存储
+    REDIS_URL = _env('REDIS_URL', 'redis://127.0.0.1:6379/0')
+
     # ---------- 外部服务 ----------
     AI_SERVICE_URL = _env('AI_SERVICE_URL', 'http://127.0.0.1:8000')
 

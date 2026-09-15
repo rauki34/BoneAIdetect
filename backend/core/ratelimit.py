@@ -15,15 +15,54 @@
 - 阶段 6 将迁至 Redis ZSET，本模块对外接口保持不变
 """
 import time
+import uuid
 from datetime import datetime
 from functools import wraps
 
 from flask import current_app, jsonify, request
 
 from core.auth import get_current_user
+from core.cache import get_redis
 from core.helpers import log_operation
 from core.state import RATE_LIMIT_CONFIG, rate_limit_lock, rate_limit_storage
 from utils.logger import logger
+
+# 滑动窗口限流（Redis 版），用 Lua 保证「淘汰 + 计数 + 写入」的原子性。
+# 若拆成多条命令，并发请求会在检查与写入之间产生竞态，导致超出阈值。
+_REDIS_LIMIT_LUA = """
+local key    = KEYS[1]
+local now    = tonumber(ARGV[1])
+local window = tonumber(ARGV[2])
+local limit  = tonumber(ARGV[3])
+local member = ARGV[4]
+
+redis.call('ZREMRANGEBYSCORE', key, 0, now - window)
+local count = redis.call('ZCARD', key)
+
+if count >= limit then
+    local oldest = redis.call('ZRANGE', key, 0, 0, 'WITHSCORES')
+    local retry = window
+    if oldest[2] then
+        retry = math.ceil(window - (now - tonumber(oldest[2])))
+    end
+    if retry < 1 then retry = 1 end
+    return {0, 0, retry}
+end
+
+redis.call('ZADD', key, now, member)
+redis.call('EXPIRE', key, window)
+return {1, limit - count - 1, 0}
+"""
+
+_limit_script = None
+
+
+def _get_limit_script(client):
+    """惰性注册 Lua 脚本（register_script 会缓存 SHA1，避免重复传输）"""
+    global _limit_script
+    if _limit_script is None:
+        _limit_script = client.register_script(_REDIS_LIMIT_LUA)
+    return _limit_script
 
 
 def client_ip():
@@ -56,7 +95,7 @@ def resolve_identity(key):
 
 
 def check_rate_limit(ident, limit_type='api_general'):
-    """滑动窗口限流检查
+    """滑动窗口限流检查（优先 Redis，不可用时降级为进程内）
 
     Args:
         ident: 限流标识（如 'ip:127.0.0.1' / 'user:3'）
@@ -69,16 +108,32 @@ def check_rate_limit(ident, limit_type='api_general'):
     max_requests = cfg['max_requests']
     window = cfg['time_window']
 
+    client = get_redis()
+    if client is not None:
+        return _check_redis(client, ident, limit_type, max_requests, window)
+    return _check_memory(ident, limit_type, max_requests, window)
+
+
+def _check_redis(client, ident, limit_type, max_requests, window):
+    now = time.time()
+    key = f'rl:{limit_type}:{ident}'
+    # member 用 uuid：同一微秒内的并发请求 score 相同，
+    # 若以时间戳作 member 会互相覆盖，导致计数偏小
+    allowed, remaining, retry_after = _get_limit_script(client)(
+        keys=[key], args=[now, window, max_requests, uuid.uuid4().hex])
+    return bool(allowed), remaining, retry_after
+
+
+def _check_memory(ident, limit_type, max_requests, window):
+    """降级实现：进程内滑动窗口（多 worker 不共享、重启清零）"""
     with rate_limit_lock:
         now = time.time()
         key = f'{ident}:{limit_type}'
 
-        # 淘汰窗口外的记录
         hits = [t for t in rate_limit_storage[key] if now - t < window]
         rate_limit_storage[key] = hits
 
         if len(hits) >= max_requests:
-            # 最早那次请求滑出窗口时即可恢复
             retry_after = int(window - (now - hits[0])) + 1
             return False, 0, max(retry_after, 1)
 
