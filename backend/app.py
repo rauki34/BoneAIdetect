@@ -16,6 +16,10 @@ from threading import Lock
 from sqlalchemy import func
 
 from utils.logger import logger
+from services.llm_client import (
+    LLMClient, LLMError, LLMConfigError,
+    LLMTimeoutError, LLMConnectionError, LLMResponseError,
+)
 # 内存存储验证码: {captcha_id: {'code': 'ABC1', 'expire_time': timestamp}}
 captcha_store = {}
 CAPTCHA_TIMEOUT = 300  # 5分钟过期
@@ -1627,8 +1631,7 @@ def update_user(user_id):
     })
 
 # ==================== AI 解读接口 ====================
-
-AI_SERVICE_URL = "http://127.0.0.1:8000"
+# 本地 AI 服务地址改由 config.py 的 AI_SERVICE_URL 提供（见 get_llm_client）
 
 def get_ai_settings():
     """获取AI服务配置"""
@@ -1650,6 +1653,20 @@ def get_ai_settings():
         'api_url': ai_api_url,
         'model': ai_model
     }
+
+def get_llm_client():
+    """由系统 AI 配置构造统一 LLM 客户端
+
+    替代原先在各处重复的 if provider == ... 分支。
+    各 Provider 的默认 timeout / max_tokens 已按原 call_* 函数设定，
+    因此建议生成类调用无需显式传参即可保持原行为。
+    """
+    ai_config = get_ai_settings()
+    # 本地服务地址来自 config.py（环境变量 AI_SERVICE_URL），
+    # 仅当数据库中未单独配置 ai_api_url 时生效
+    if ai_config.get('provider') == 'local' and not ai_config.get('api_url'):
+        ai_config['api_url'] = app.config.get('AI_SERVICE_URL', '')
+    return LLMClient.from_settings(ai_config)
 
 def generate_ai_advice_async(history_id, detections):
     """异步生成AI医疗建议
@@ -1685,23 +1702,16 @@ def generate_ai_advice_async(history_id, detections):
 
 请用中文回复，结构化输出。"""
             
-            # 获取AI配置
+            # 获取AI配置并构造统一客户端
+            # 不显式传 timeout / max_tokens：各 Provider 的默认值与
+            # 原 call_* 函数保持一致（openai 60s/1000, modelscope 120s/2000,
+            # custom 60s/不限制, local 180s/不限制）
             ai_config = get_ai_settings()
             provider = ai_config['provider']
-            
-            # 根据提供商调用不同的AI服务
-            if provider == 'local':
-                reply = call_local_ai(prompt, None)
-            elif provider == 'openai':
-                reply = call_openai_api(prompt, ai_config['api_key'], ai_config['model'])
-            elif provider == 'custom':
-                reply = call_custom_api(prompt, ai_config['api_url'], ai_config['api_key'], ai_config['model'])
-            elif provider == 'modelscope':
-                reply = call_modelscope_api(prompt, ai_config['api_key'], ai_config['model'], None)
-            else:
-                logger.info(f"未知的AI服务提供商: {provider}")
-                return
-            
+
+            client = get_llm_client()
+            reply = client.chat_text(prompt)
+
             # 构建医疗建议数据
             medical_advice = {
                 'interpretation': reply,
@@ -1744,137 +1754,6 @@ def generate_ai_advice_async(history_id, detections):
     thread = threading.Thread(target=generate_advice)
     thread.daemon = True
     thread.start()
-
-def call_local_ai(prompt, image_base64=None):
-    """调用本地部署的AI服务"""
-    ai_request = {"prompt": prompt}
-    if image_base64:
-        ai_request["image"] = image_base64
-    
-    response = requests.post(
-        f"{AI_SERVICE_URL}/chat",
-        json=ai_request,
-        timeout=180
-    )
-    
-    if response.status_code == 200:
-        ai_result = response.json()
-        return ai_result.get("reply", "AI 未能生成有效建议")
-    else:
-        raise Exception(f"AI服务响应失败: {response.text}")
-
-def call_openai_api(prompt, api_key, model='gpt-4'):
-    """调用OpenAI API"""
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json"
-    }
-    
-    data = {
-        "model": model,
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.7,
-        "max_tokens": 1000
-    }
-    
-    response = requests.post(
-        "https://api.openai.com/v1/chat/completions",
-        headers=headers,
-        json=data,
-        timeout=60
-    )
-    
-    if response.status_code == 200:
-        result = response.json()
-        return result['choices'][0]['message']['content']
-    else:
-        raise Exception(f"OpenAI API调用失败: {response.text}")
-
-def call_custom_api(prompt, api_url, api_key, model='gpt-4'):
-    """调用自定义API"""
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json"
-    }
-    
-    data = {
-        "model": model,
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.7
-    }
-    
-    response = requests.post(
-        api_url,
-        headers=headers,
-        json=data,
-        timeout=60
-    )
-    
-    if response.status_code == 200:
-        result = response.json()
-        # 适配不同API的响应格式
-        if 'choices' in result:
-            return result['choices'][0]['message']['content']
-        elif 'result' in result:
-            return result['result']
-        elif 'reply' in result:
-            return result['reply']
-        else:
-            return str(result)
-    else:
-        raise Exception(f"自定义API调用失败: {response.text}")
-
-def call_modelscope_api(prompt, api_key, model, image_base64=None):
-    """调用ModelScope API - 支持多模态"""
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json"
-    }
-    
-    # 构建消息内容
-    content = []
-    
-    # 添加文本
-    content.append({
-        "type": "text",
-        "text": prompt
-    })
-    
-    # 如果有图片，添加图片
-    if image_base64:
-        content.append({
-            "type": "image_url",
-            "image_url": {
-                "url": f"data:image/jpeg;base64,{image_base64}"
-            }
-        })
-    
-    data = {
-        "model": model,
-        "messages": [{
-            "role": "user",
-            "content": content
-        }],
-        "temperature": 0.7,
-        "max_tokens": 2000,
-        "stream": False  # 使用非流式响应
-    }
-    
-    response = requests.post(
-        "https://api-inference.modelscope.cn/v1/chat/completions",
-        headers=headers,
-        json=data,
-        timeout=120
-    )
-    
-    if response.status_code == 200:
-        result = response.json()
-        if 'choices' in result and len(result['choices']) > 0:
-            return result['choices'][0]['message']['content']
-        else:
-            raise Exception(f"ModelScope API返回格式异常: {result}")
-    else:
-        raise Exception(f"ModelScope API调用失败: {response.status_code} - {response.text}")
 
 @app.route("/api/interpret", methods=["POST"])
 @require_role('admin', 'doctor')
@@ -1919,22 +1798,17 @@ def interpret_detection():
         prompt = custom_prompt
 
     try:
-        # 获取AI配置
+        # 获取AI配置并构造统一客户端
         ai_config = get_ai_settings()
         provider = ai_config['provider']
-        
-        # 根据提供商调用不同的AI服务
-        if provider == 'local':
-            reply = call_local_ai(prompt, image_base64)
-        elif provider == 'openai':
-            reply = call_openai_api(prompt, ai_config['api_key'], ai_config['model'])
-        elif provider == 'custom':
-            reply = call_custom_api(prompt, ai_config['api_url'], ai_config['api_key'], ai_config['model'])
-        elif provider == 'modelscope':
-            reply = call_modelscope_api(prompt, ai_config['api_key'], ai_config['model'], image_base64)
-        else:
-            return jsonify({"error": "未知的AI服务提供商"}), 400
-        
+
+        # 原实现仅 local 与 modelscope 会携带图片，其余 provider 忽略该参数，
+        # 此处保持原行为以免多模态模型不支持时调用失败
+        image = image_base64 if provider in ('local', 'modelscope') else None
+
+        client = get_llm_client()
+        reply = client.chat_text(prompt, image_base64=image)
+
         # 记录操作日志
         log_operation(f"AI解读检测结果:检测数={len(detections)},提供商={provider}")
         
@@ -1945,7 +1819,9 @@ def interpret_detection():
             "ai_provider": provider
         })
 
-    except requests.exceptions.ConnectionError:
+    # 同时捕获新客户端的 LLMConnectionError 与底层 requests 异常：
+    # 统一客户端已重试 MAX_RETRIES 次仍失败才会抛到此处
+    except (LLMConnectionError, requests.exceptions.ConnectionError):
         ai_config = get_ai_settings()
         provider = ai_config.get('provider', 'local')
         if provider == 'local':
@@ -1958,12 +1834,12 @@ def interpret_detection():
                 "error": "无法连接到 AI 服务",
                 "hint": "请检查AI服务配置和网络连接"
             }), 503
-    except requests.exceptions.Timeout:
+    except (LLMTimeoutError, requests.exceptions.Timeout):
         return jsonify({"error": "AI 服务响应超时"}), 504
+    except LLMConfigError as e:
+        return jsonify({"error": f"AI 服务配置有误: {e}"}), 400
     except Exception as e:
-        import traceback
-        logger.error(f"AI解读接口错误: {str(e)}")
-        logger.error(traceback.format_exc())
+        logger.error(f"AI解读接口错误: {str(e)}", exc_info=True)
         return jsonify({"error": str(e)}), 500
 
 
@@ -6411,179 +6287,27 @@ def ai_assistant_sessions():
 
 
 def call_ai_assistant_api(messages):
-    """调用系统配置的AI服务
-    
-    复用系统中已有的AI配置和调用方法：
-    - local: 本地AI服务
-    - openai: OpenAI API
-    - custom: 自定义API
-    - modelscope: ModelScope API
+    """调用系统配置的AI服务进行对话
+
+    失败时降级为本地模拟回复（保持原有容错行为）。
+    注意：降级是静默的 —— 用户拿到的是预设话术而非真实模型输出，
+    因此以 WARNING 记录失败原因，避免"服务其实一直不可用"被掩盖。
     """
     try:
-        # 获取系统AI配置
-        ai_config = get_ai_settings()
-        provider = ai_config['provider']
-        api_key = ai_config['api_key']
-        api_url = ai_config['api_url']
-        model = ai_config['model']
-        
-        # 根据提供商调用不同的AI服务
-        if provider == 'local':
-            return call_local_ai_assistant(messages)
-        elif provider == 'openai':
-            return call_openai_assistant(messages, api_key, model)
-        elif provider == 'custom':
-            return call_custom_assistant(messages, api_url, api_key, model)
-        elif provider == 'modelscope':
-            return call_modelscope_assistant(messages, api_key, model)
-        else:
-            # 未知提供商，使用模拟回复
-            logger.info(f"未知的AI服务提供商: {provider}，使用模拟回复")
-            return get_mock_reply(messages)
-            
-    except Exception as e:
-        logger.error(f"AI服务调用失败: {e}")
+        client = get_llm_client()
+
+        # max_tokens 保持原值 500。
+        # 超时：远端服务沿用原有的 60s；本地模型生成较慢（实测约 90s），
+        # 原实现给本地设的 30s 必然超时并静默降级为模拟回复，故改为
+        # 使用 Provider 默认值（local=180s）。
+        timeout = None if client.provider_name == 'local' else 60
+        return client.chat(messages, timeout=timeout, max_tokens=500)
+
+    except LLMError as e:
+        logger.warning('AI 服务不可用，已降级为模拟回复: %s', e)
         return get_mock_reply(messages)
-
-
-def call_local_ai_assistant(messages):
-    """调用本地AI服务进行对话"""
-    try:
-        # 将messages转换为prompt
-        prompt = ""
-        for msg in messages:
-            role = msg.get('role', 'user')
-            content = msg.get('content', '')
-            if role == 'system':
-                prompt += f"系统指令：{content}\n\n"
-            elif role == 'user':
-                prompt += f"用户：{content}\n"
-            else:
-                prompt += f"助手：{content}\n"
-        
-        prompt += "助手："
-        
-        response = requests.post(
-            f"{AI_SERVICE_URL}/chat",
-            json={"prompt": prompt},
-            timeout=30
-        )
-        
-        if response.status_code == 200:
-            result = response.json()
-            return result.get("reply", result.get("result", "AI未能生成有效回复"))
-        else:
-            raise Exception(f"本地AI服务响应失败: {response.text}")
     except Exception as e:
-        logger.error(f"本地AI服务调用失败: {e}")
-        return get_mock_reply(messages)
-
-
-def call_openai_assistant(messages, api_key, model='gpt-4'):
-    """调用OpenAI API进行对话"""
-    try:
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json"
-        }
-        
-        data = {
-            "model": model,
-            "messages": messages,
-            "temperature": 0.7,
-            "max_tokens": 500
-        }
-        
-        response = requests.post(
-            "https://api.openai.com/v1/chat/completions",
-            headers=headers,
-            json=data,
-            timeout=60
-        )
-        
-        if response.status_code == 200:
-            result = response.json()
-            return result['choices'][0]['message']['content']
-        else:
-            raise Exception(f"OpenAI API调用失败: {response.text}")
-    except Exception as e:
-        logger.error(f"OpenAI API调用失败: {e}")
-        return get_mock_reply(messages)
-
-
-def call_custom_assistant(messages, api_url, api_key, model='gpt-4'):
-    """调用自定义API进行对话"""
-    try:
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json"
-        }
-        
-        data = {
-            "model": model,
-            "messages": messages,
-            "temperature": 0.7,
-            "max_tokens": 500
-        }
-        
-        response = requests.post(
-            api_url,
-            headers=headers,
-            json=data,
-            timeout=60
-        )
-        
-        if response.status_code == 200:
-            result = response.json()
-            # 适配不同API的响应格式
-            if 'choices' in result:
-                return result['choices'][0]['message']['content']
-            elif 'result' in result:
-                return result['result']
-            elif 'reply' in result:
-                return result['reply']
-            else:
-                return str(result)
-        else:
-            raise Exception(f"自定义API调用失败: {response.text}")
-    except Exception as e:
-        logger.error(f"自定义API调用失败: {e}")
-        return get_mock_reply(messages)
-
-
-def call_modelscope_assistant(messages, api_key, model):
-    """调用ModelScope API进行对话"""
-    try:
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json"
-        }
-        
-        data = {
-            "model": model,
-            "messages": messages,
-            "temperature": 0.7,
-            "max_tokens": 500,
-            "stream": False
-        }
-        
-        response = requests.post(
-            "https://api-inference.modelscope.cn/v1/chat/completions",
-            headers=headers,
-            json=data,
-            timeout=60
-        )
-        
-        if response.status_code == 200:
-            result = response.json()
-            if 'choices' in result and len(result['choices']) > 0:
-                return result['choices'][0]['message']['content']
-            else:
-                raise Exception(f"ModelScope API返回格式异常: {result}")
-        else:
-            raise Exception(f"ModelScope API调用失败: {response.status_code} - {response.text}")
-    except Exception as e:
-        logger.error(f"ModelScope API调用失败: {e}")
+        logger.error('AI 服务调用异常，已降级为模拟回复: %s', e, exc_info=True)
         return get_mock_reply(messages)
 
 
