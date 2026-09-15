@@ -736,6 +736,7 @@ import VueMarkdown from 'vue-markdown-render'
 import 'github-markdown-css/github-markdown-light.css'
 import axios from '../utils/axios'
 import { formatDate, formatDateTime } from '../utils/datetime'
+import { clearAuth } from '../utils/auth'
 import FloatingAIAssistant from '../components/FloatingAIAssistant.vue'
 
 const router = useRouter()
@@ -1120,9 +1121,7 @@ const handleLogout = () => {
     cancelButtonText: '取消',
     type: 'warning'
   }).then(() => {
-    localStorage.removeItem('token')
-    localStorage.removeItem('username')
-    localStorage.removeItem('userRole')
+    clearAuth()
     router.push('/login')
     ElMessage.success('已退出登录')
   })

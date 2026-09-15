@@ -328,6 +328,7 @@ import {
   User, Lock, FirstAidKit, Check, ArrowRight, ArrowLeft
 } from '@element-plus/icons-vue'
 import axios from '../utils/axios'
+import { saveAuth } from '../utils/auth'
 import PatientRegisterDialog from '../components/PatientRegisterDialog.vue'
 import DoctorRegisterDialog from '../components/DoctorRegisterDialog.vue'
 
@@ -409,11 +410,13 @@ const handleLogin = async () => {
       const res = await axios.post('/api/login', loginData)
       
       if (res.data.success) {
-        // 存储登录信息
-        localStorage.setItem('token', 'ok')
-        localStorage.setItem('username', res.data.username)
-        localStorage.setItem('userRole', res.data.role)
-        
+        // 存储登录信息（access_token 为真实 JWT，由 utils/axios.js 注入请求头）
+        saveAuth({
+          accessToken: res.data.access_token,
+          username: res.data.username,
+          role: res.data.role
+        })
+
         if (rememberMe.value) {
           localStorage.setItem('rememberedUsername', form.username)
         }
@@ -494,9 +497,11 @@ const handleAdminLogin = async () => {
       })
       
       if (res.data.success && res.data.role === 'admin') {
-        localStorage.setItem('token', 'ok')
-        localStorage.setItem('username', res.data.username)
-        localStorage.setItem('userRole', 'admin')
+        saveAuth({
+          accessToken: res.data.access_token,
+          username: res.data.username,
+          role: 'admin'
+        })
         ElMessage.success('管理员登录成功')
         router.push('/admin')
       } else {

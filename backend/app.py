@@ -7,6 +7,10 @@ from datetime import datetime
 from pathlib import Path
 from functools import wraps
 from werkzeug.security import generate_password_hash, check_password_hash
+from flask_jwt_extended import (
+    JWTManager, create_access_token, jwt_required,
+    get_jwt_identity, get_jwt, verify_jwt_in_request,
+)
 from PIL import Image, ImageDraw, ImageFont
 from database import db, User, DetectionHistory, SystemSettings, OperationLog, CustomModel, TrainingTask, UserAIModel, Patient, Examination, AIConversation, PatientProfile, DoctorProfile, DoctorRegistration, MedicalRecord, Announcement, AnnouncementRead, DoctorPatientRelation, Message, init_db, migrate_from_json
 import torch
@@ -54,6 +58,9 @@ CORS(app, resources={
 
 from flask_migrate import Migrate
 migrate = Migrate(app, db)      # 注册 migrate 扩展
+
+# JWT 认证（密钥与有效期来自 config.py）
+jwt = JWTManager(app)
 
 # 项目根目录（上传目录、结果目录、模型目录均基于此）
 # 数据库 URI 与 SQLALCHEMY_TRACK_MODIFICATIONS 已由 config.py 统一设置
@@ -598,11 +605,38 @@ def rate_limit(limit_type='api_general'):
 # ==================== 权限验证装饰器 ====================
 
 def get_current_user():
-    """从请求头获取当前用户"""
+    """获取当前登录用户
+
+    过渡期采用**双模式**认证，新旧并存以便灰度切换：
+      1. JWT（Authorization: Bearer <token>）—— 新方式，有签名校验
+      2. X-Username 请求头 —— 旧方式，**无任何校验，可被任意伪造**
+
+    旧方式仅用于兼容尚未升级的客户端，会打出 WARNING 日志。
+    待观察期内不再出现该日志后，删除下方"方式二"分支。
+    """
+    # --- 方式一：JWT ---
+    try:
+        # optional=True：无 token 时返回 None 而不报错；
+        # 但 token 存在且非法时会抛异常，需一并吞掉走旧方式兜底
+        verify_jwt_in_request(optional=True)
+        identity = get_jwt_identity()
+    except Exception:
+        identity = None
+
+    if identity:
+        return User.query.filter_by(username=identity).first()
+
+    # --- 方式二：旧 X-Username（TODO: 全量切换后删除）---
     username = request.headers.get('X-Username')
-    if not username:
-        return None
-    return User.query.filter_by(username=username).first()
+    if username:
+        logger.warning(
+            '检测到已废弃的 X-Username 认证: %s'
+            '（该方式无签名校验、可被伪造，将在后续版本移除）',
+            username,
+        )
+        return User.query.filter_by(username=username).first()
+
+    return None
 
 def require_auth(f):
     """要求登录的装饰器"""
@@ -742,12 +776,20 @@ def login():
     
     logger.info(f"登录成功: 用户 {username}, 角色 {user.role}")
     log_operation(f"用户登录:{username}")
+
+    # 签发 JWT。expires_delta 留空则使用 config.py 的 JWT_ACCESS_TOKEN_EXPIRES
+    access_token = create_access_token(
+        identity=user.username,
+        additional_claims={'role': user.role, 'uid': user.id},
+    )
+
     return jsonify({
         "success": True,
         "username": user.username,
         "role": user.role,
         "full_name": user.full_name,
-        "redirect_url": redirect_url
+        "redirect_url": redirect_url,
+        "access_token": access_token,   # 前端存入 localStorage，后续请求带 Authorization
     })
 
 

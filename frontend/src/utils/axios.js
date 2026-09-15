@@ -1,5 +1,6 @@
 import axios from 'axios'
 import { ElMessage } from 'element-plus'
+import { clearAuth } from './auth'
 
 // 开发环境兜底到本机后端；生产环境留空（''）表示同源，由 Nginx 反向代理 /api
 // 注意用 ?? 而非 ||，因为空字符串是生产环境的有效取值
@@ -66,10 +67,7 @@ instance.interceptors.response.use(
 
     if (shouldHandle401 && !redirectingToLogin) {
       redirectingToLogin = true
-      localStorage.removeItem('access_token')
-      localStorage.removeItem('token')
-      localStorage.removeItem('username')
-      localStorage.removeItem('userRole')
+      clearAuth()
 
       ElMessage.error('登录已过期，请重新登录')
 
