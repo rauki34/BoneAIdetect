@@ -311,7 +311,10 @@ async function startDetection() {
 
 /* 建立 WebSocket 连接 */
 function connectWebSocket(taskId) {
-  const wsUrl = `ws://127.0.0.1:5000/ws/video/${taskId}`
+  // 开发环境走 .env.development 配置；生产环境留空则按当前页面协议/主机推导
+  const wsBase = import.meta.env.VITE_WS_BASE
+    || `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}`
+  const wsUrl = `${wsBase}/ws/video/${taskId}`
   ws = new WebSocket(wsUrl)
 
   ws.onopen = () => {
