@@ -1,11 +1,14 @@
 import { createRouter, createWebHistory } from "vue-router"
-import SmartOrthopedicsLogin from "../views/SmartOrthopedicsLogin.vue"
-import PatientPortal from "../views/PatientPortal.vue"
-import DoctorWorkstation from "../views/DoctorWorkstation.vue"
-import AdminApproval from "../views/AdminApproval.vue"
-import Detection from "../views/Detection.vue"
-import VideoStreamDetection from "../views/VideoStreamDetection.vue"
-import CameraDetection from "../views/CameraDetection.vue"
+
+// 页面组件懒加载（按路由分包）
+// 同时消除了 router -> views -> axios -> router 的静态循环依赖
+const SmartOrthopedicsLogin = () => import("../views/SmartOrthopedicsLogin.vue")
+const PatientPortal = () => import("../views/PatientPortal.vue")
+const DoctorWorkstation = () => import("../views/DoctorWorkstation.vue")
+const AdminApproval = () => import("../views/AdminApproval.vue")
+const Detection = () => import("../views/Detection.vue")
+const VideoStreamDetection = () => import("../views/VideoStreamDetection.vue")
+const CameraDetection = () => import("../views/CameraDetection.vue")
 
 // 修复 Edge 最小化自动弹回
 const originalReplaceState = history.replaceState;
