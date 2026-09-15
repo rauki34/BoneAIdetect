@@ -121,7 +121,8 @@
               />
             </el-form-item>
 
-            <el-form-item v-if="selectedPortal === 'patient'" prop="captcha">
+            <!-- 三个入口均需验证码：后端已强制校验 -->
+            <el-form-item prop="captcha">
               <div class="captcha-row">
                 <el-input
                   v-model="form.captcha"
@@ -195,6 +196,19 @@
             :prefix-icon="Lock"
             show-password
           />
+        </el-form-item>
+        <el-form-item prop="captcha">
+          <div class="captcha-row">
+            <el-input
+              v-model="adminForm.captcha"
+              placeholder="验证码"
+              maxlength="4"
+              style="flex: 1"
+            />
+            <div class="captcha-image" @click="refreshAdminCaptcha">
+              <img v-if="adminCaptchaImage" :src="adminCaptchaImage" alt="验证码" />
+            </div>
+          </div>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -364,28 +378,33 @@ const portalTitle = computed(() => {
 // 选择入口
 const selectPortal = (portal) => {
   selectedPortal.value = portal
-  if (portal === 'patient') {
-    refreshCaptcha()
-  }
+  // 三个入口现在都需要验证码，切换时重新加载
+  refreshCaptcha()
 }
 
-// 刷新验证码
-const refreshCaptcha = async () => {
+// 加载验证码（登录表单与管理员弹窗共用）
+const loadCaptcha = async (idRef, imageRef, formObj) => {
   try {
     const res = await axios.get('/api/captcha', {
       responseType: 'blob'
     })
-    captchaId.value = res.headers['x-captcha-id'] || ''
+    idRef.value = res.headers['x-captcha-id'] || ''
     const reader = new FileReader()
     reader.onload = () => {
-      captchaImage.value = reader.result
+      imageRef.value = reader.result
     }
     reader.readAsDataURL(res.data)
-    form.captcha = ''
+    if (formObj) formObj.captcha = ''
   } catch (err) {
     console.error('获取验证码失败:', err)
   }
 }
+
+// 刷新主登录表单的验证码
+const refreshCaptcha = () => loadCaptcha(captchaId, captchaImage, form)
+
+// 刷新管理员弹窗的验证码
+const refreshAdminCaptcha = () => loadCaptcha(adminCaptchaId, adminCaptchaImage, adminForm)
 
 // 登录
 const handleLogin = async () => {
@@ -399,14 +418,11 @@ const handleLogin = async () => {
       const loginData = {
         username: form.username,
         password: form.password,
-        role: selectedPortal.value
+        role: selectedPortal.value,
+        captcha: form.captcha,
+        captcha_id: captchaId.value
       }
-      
-      if (selectedPortal.value === 'patient') {
-        loginData.captcha = form.captcha
-        loginData.captcha_id = captchaId.value
-      }
-      
+
       const res = await axios.post('/api/login', loginData)
       
       if (res.data.success) {
@@ -441,9 +457,8 @@ const handleLogin = async () => {
     } catch (err) {
       const msg = err.response?.data?.error || '登录失败'
       ElMessage.error(msg)
-      if (selectedPortal.value === 'patient') {
-        refreshCaptcha()
-      }
+      // 验证码为一次性使用，无论哪个入口失败都要换一张
+      refreshCaptcha()
     } finally {
       loading.value = false
     }
@@ -456,13 +471,17 @@ const adminClickTimer = ref(null)
 const showAdminLogin = ref(false)
 const adminLoading = ref(false)
 const adminFormRef = ref(null)
+const adminCaptchaId = ref('')
+const adminCaptchaImage = ref('')
 const adminForm = reactive({
   username: '',
-  password: ''
+  password: '',
+  captcha: ''
 })
 const adminRules = {
   username: [{ required: true, message: '请输入管理员账号', trigger: 'blur' }],
-  password: [{ required: true, message: '请输入密码', trigger: 'blur' }]
+  password: [{ required: true, message: '请输入密码', trigger: 'blur' }],
+  captcha: [{ required: true, message: '请输入验证码', trigger: 'blur' }]
 }
 
 const handleAdminTrigger = () => {
@@ -479,6 +498,7 @@ const handleAdminTrigger = () => {
   if (adminClickCount.value >= 5) {
     adminClickCount.value = 0
     showAdminLogin.value = true
+    refreshAdminCaptcha()   // 打开弹窗即加载验证码
   }
 }
 
@@ -493,9 +513,11 @@ const handleAdminLogin = async () => {
       const res = await axios.post('/api/login', {
         username: adminForm.username,
         password: adminForm.password,
-        role: 'admin'
+        role: 'admin',
+        captcha: adminForm.captcha,
+        captcha_id: adminCaptchaId.value
       })
-      
+
       if (res.data.success && res.data.role === 'admin') {
         saveAuth({
           accessToken: res.data.access_token,
@@ -510,6 +532,8 @@ const handleAdminLogin = async () => {
     } catch (err) {
       const msg = err.response?.data?.error || '登录失败'
       ElMessage.error(msg)
+      // 验证码为一次性使用，失败后必须换一张
+      refreshAdminCaptcha()
     } finally {
       adminLoading.value = false
     }

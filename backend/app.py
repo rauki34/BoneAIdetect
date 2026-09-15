@@ -720,10 +720,21 @@ def login():
     username = data.get("username", "").strip()
     password = data.get("password", "").strip()
     expected_role = data.get("role", "").strip()  # 前端期望登录的角色
-    
+
+    # 校验验证码放在最前面：既阻断暴力破解，也避免通过
+    # "用户不存在 / 密码错误" 的不同响应枚举出有效用户名
+    ok, error = check_captcha(
+        data.get("captcha", "").strip(),
+        data.get("captcha_id", "").strip(),
+    )
+    if not ok:
+        log_operation(f"登录失败:验证码校验未通过-{username or '(空用户名)'}",
+                      success=False, error_msg=error)
+        return jsonify({"error": error, "error_code": "CAPTCHA_001"}), 400
+
     if not username or not password:
         return jsonify({"error": "用户名和密码不能为空"}), 400
-    
+
     user = User.query.filter_by(username=username).first()
     if not user:
         log_operation(f"登录失败:用户不存在-{username}", success=False, error_msg="用户不存在")
@@ -837,31 +848,11 @@ def register():
     if not valid:
         return jsonify({"error": error_msg}), 400
     
-    # 验证验证码
-    if not captcha:
-        return jsonify({"error": "验证码不能为空"}), 400
-    
-    if not captcha_id:
-        return jsonify({"error": "验证码ID不能为空"}), 400
-    
-    # 从内存存储获取验证码
-    captcha_data = captcha_store.get(captcha_id)
-    logger.debug(f"[DEBUG] 验证验证码 - 用户输入: {captcha}, captcha_id: {captcha_id}, 存储数据: {captcha_data}")
-    
-    if not captcha_data:
-        return jsonify({"error": "验证码已过期"}), 400
-    
-    # 检查是否过期
-    if captcha_data['expire_time'] < time.time():
-        del captcha_store[captcha_id]
-        return jsonify({"error": "验证码已过期"}), 400
-    
-    if captcha != captcha_data['code'].upper():
-        return jsonify({"error": "验证码错误"}), 400
-    
-    # 验证成功后删除验证码
-    del captcha_store[captcha_id]
-    
+    # 验证验证码（公共逻辑见 check_captcha）
+    ok, error = check_captcha(captcha, captcha_id)
+    if not ok:
+        return jsonify({"error": error}), 400
+
     # 检查用户是否已存在
     if User.query.filter_by(username=username).first():
         return jsonify({"error": "用户名已存在"}), 409
@@ -2786,27 +2777,48 @@ def generate_captcha():
     return response
 
 
+def check_captcha(captcha, captcha_id):
+    """校验图形验证码
+
+    返回 (是否通过, 错误信息)。校验通过后立即销毁验证码，防止重放攻击。
+
+    验证码存于进程内 captcha_store（见 generate_captcha），5 分钟过期。
+    注意：多进程部署时该存储不共享，需改为 Redis 等外部存储。
+    """
+    if not captcha:
+        return False, "验证码不能为空"
+    if not captcha_id:
+        return False, "验证码ID不能为空"
+
+    data = captcha_store.get(captcha_id)
+    if not data:
+        return False, "验证码已过期"
+
+    if data['expire_time'] < time.time():
+        captcha_store.pop(captcha_id, None)
+        return False, "验证码已过期"
+
+    if captcha.upper() != data['code'].upper():
+        return False, "验证码错误"
+
+    captcha_store.pop(captcha_id, None)   # 一次性使用
+    return True, None
+
+
 @app.route("/api/captcha/verify", methods=["POST"])
 def verify_captcha():
-    """验证验证码"""
-    data = request.json
-    captcha = data.get("captcha", "").strip().upper()
-    
-    if not captcha:
-        return jsonify({"error": "验证码不能为空"}), 400
-    
-    # 从session获取验证码
-    session_captcha = session.get('captcha', '').upper()
-    
-    if not session_captcha:
-        return jsonify({"error": "验证码已过期"}), 400
-    
-    if captcha != session_captcha:
-        return jsonify({"error": "验证码错误"}), 400
-    
-    # 验证成功后清除session中的验证码
-    session.pop('captcha', None)
-    
+    """验证验证码
+
+    修复：原实现从 session 读取验证码，而 generate_captcha 实际写入
+    captcha_store，两者不匹配导致该接口恒返回"验证码已过期"。
+    """
+    data = request.json or {}
+    ok, error = check_captcha(
+        data.get("captcha", "").strip(),
+        data.get("captcha_id", "").strip(),
+    )
+    if not ok:
+        return jsonify({"error": error}), 400
     return jsonify({"success": True, "message": "验证码验证成功"})
 
 
