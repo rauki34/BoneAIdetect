@@ -11,6 +11,7 @@
     logger.error("调用失败", exc_info=True)      # 自动带堆栈
 """
 import logging
+import os
 import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -23,16 +24,23 @@ MAX_BYTES = 10 * 1024 * 1024   # 10MB
 BACKUP_COUNT = 5               # 保留 5 份历史
 
 
-def get_logger(name: str = 'app', level: int = logging.INFO) -> logging.Logger:
+def _resolve_level(default=logging.INFO) -> int:
+    """从环境变量 LOG_LEVEL 读取日志级别（DEBUG/INFO/WARNING/ERROR）"""
+    name = os.environ.get('LOG_LEVEL', '').strip().upper()
+    return getattr(logging, name, default) if name else default
+
+
+def get_logger(name: str = 'app', level: int | None = None) -> logging.Logger:
     """获取（并初始化）一个 logger
 
     重复调用返回同一个实例，不会重复添加 handler。
+    级别默认 INFO，可用环境变量 LOG_LEVEL 覆盖。
     """
     logger = logging.getLogger(name)
     if logger.handlers:          # 已初始化过
         return logger
 
-    logger.setLevel(level)
+    logger.setLevel(level if level is not None else _resolve_level())
     formatter = logging.Formatter(LOG_FORMAT, datefmt=DATE_FORMAT)
 
     # --- 控制台 ---
