@@ -35,10 +35,6 @@ from services.llm_client import (
     LLMClient, LLMError, LLMConfigError,
     LLMTimeoutError, LLMConnectionError, LLMResponseError,
 )
-# 内存存储验证码: {captcha_id: {'code': 'ABC1', 'expire_time': timestamp}}
-captcha_store = {}
-CAPTCHA_TIMEOUT = 300  # 5分钟过期
-
 app = Flask(__name__)
 
 # 从 config.py 统一加载配置
@@ -66,9 +62,17 @@ migrate = Migrate(app, db)      # 注册 migrate 扩展
 # JWT 认证（密钥与有效期来自 config.py）
 jwt = JWTManager(app)
 
-# 项目根目录（上传目录、结果目录、模型目录均基于此）
-# 数据库 URI 与 SQLALCHEMY_TRACK_MODIFICATIONS 已由 config.py 统一设置
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# 路径常量与共享状态已抽至 core/ 包（供蓝图模块共用）
+from core.paths import (      # noqa: E402
+    BASE_DIR, UPLOADS, RESULTS, MODELS_DIR,
+    MODEL_CANDIDATES, BASE_MODEL_MAP,
+)
+from core.state import (      # noqa: E402
+    captcha_store, CAPTCHA_TIMEOUT,
+    models, init_models, load_models,
+    rate_limit_storage, rate_limit_lock, RATE_LIMIT_CONFIG,
+    video_tasks, training_tasks, training_stop_flags,
+)
 
 # 初始化数据库
 init_db(app)
@@ -77,52 +81,8 @@ init_db(app)
 with app.app_context():
     migrate_from_json(app)
 
-# 全局模型候选（键 -> 权重文件路径）
-UPLOADS = os.path.join(BASE_DIR, "uploads")
-RESULTS = os.path.join(BASE_DIR, "results")
-MODELS_DIR = os.path.join(BASE_DIR, "models")
-os.makedirs(UPLOADS, exist_ok=True)
-os.makedirs(RESULTS, exist_ok=True)
-os.makedirs(MODELS_DIR, exist_ok=True)
-# 模型文件映射: 模型键 -> 模型文件路径
-MODEL_CANDIDATES = {
-    "yolov8n": os.path.join(BASE_DIR, "models", "yolov8n.pt"),
-    "yolov8s": os.path.join(BASE_DIR, "models", "yolov8s.pt"),
-    "yolov8m": os.path.join(BASE_DIR, "models", "yolov8m.pt"),
-    "yolo11n": os.path.join(BASE_DIR, "models", "yolo11n.pt"),
-    "yolo11s": os.path.join(BASE_DIR, "models", "yolo11s.pt"),
-    "yolo11m": os.path.join(BASE_DIR, "models", "yolo11m.pt"),
-    "yolo26n": os.path.join(BASE_DIR, "models", "yolo26n.pt"),
-}
-
-# 基础模型到实际模型文件名的映射（用于训练时加载）
-BASE_MODEL_MAP = {
-    "yolov8n": "yolov8n",
-    "yolov8s": "yolov8s",
-    "yolov8m": "yolov8m",
-    "yolo11n": "yolo11n",
-    "yolo11s": "yolo11s",
-    "yolo11m": "yolo11m",
-    "yolo26n": "yolo26n",
-}
-
-
-# 加载模型（仅加载存在的权重文件，避免启动失败）
-def load_models():
-    loaded = {}
-    for name, path in MODEL_CANDIDATES.items():
-        if os.path.exists(path):
-            try:
-                loaded[name] = YOLO(path)
-                logger.info(f"Loaded model {name} from {path}")
-            except Exception as e:
-                logger.error(f"Failed to load model {name} from {path}: {e}")
-        else:
-            logger.info(f"Model file for {name} not found at {path}, skipping")
-    return loaded
-
-
-models = load_models()
+# 加载预置 YOLO 模型
+init_models()
 
 
 # ==================== 统一错误处理 ====================
@@ -501,22 +461,7 @@ def sanitize_ai_input(text):
 
 
 # ==================== 限流保护 ====================
-
-# 限流配置
-RATE_LIMIT_CONFIG = {
-    'ai_chat': {
-        'max_requests': 10,  # 最大请求数
-        'time_window': 60,   # 时间窗口(秒)
-    },
-    'api_general': {
-        'max_requests': 100,
-        'time_window': 60,
-    }
-}
-
-# 存储用户请求记录
-rate_limit_storage = defaultdict(list)
-rate_limit_lock = Lock()
+# RATE_LIMIT_CONFIG / rate_limit_storage / rate_limit_lock 已抽至 core.state
 
 
 def check_rate_limit(user_id, limit_type='api_general'):
@@ -2377,8 +2322,7 @@ import queue
 
 sock = Sock(app)
 
-# 视频检测任务管理
-video_tasks = {}
+# video_tasks 已抽至 core.state
 
 @app.route("/api/video/detect", methods=["POST"])
 @require_role('admin', 'doctor')
@@ -2827,14 +2771,7 @@ def verify_captcha():
 
 
 # ==================== 模型训练管理接口 ====================
-
-# 训练任务管理
-training_tasks = {}
-
-# 训练任务停止标志
-# 格式: {task_id: stop_flag}
-# stop_flag: True表示需要停止训练
-training_stop_flags = {}
+# training_tasks / training_stop_flags 已抽至 core.state
 
 @app.route("/api/models", methods=["GET"])
 @require_auth

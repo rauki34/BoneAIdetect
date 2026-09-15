@@ -74,20 +74,25 @@ def login(username, password, role, captcha_ok=True):
 
 
 def main():
-    if LOG is None:
-        print('提示：未提供日志路径，需要验证码的用例将被跳过\n')
+    # 登录流程强制校验验证码，而验证码只存在于服务端内存 + PNG 图像中。
+    # 脚本通过 DEBUG 日志取明文，因此日志路径是必需参数。
+    if LOG is None or not LOG.exists():
+        print('缺少后端日志路径，无法获取验证码明文。\n')
+        print('用法:')
+        print('  1) cd backend && LOG_LEVEL=DEBUG python app.py')
+        print('  2) python scripts/verify_auth_flow.py <后端日志文件路径>')
+        return 2
 
     users = discover_users()
     print(f'发现账号: {users}\n')
 
     # ---------- 1. 验证码 ----------
-    if LOG:
-        print('[1] 验证码接口')
-        cid, resp = get_captcha()
-        check('GET /api/captcha 返回 200', resp.status_code == 200)
-        check('响应头含 X-Captcha-ID', bool(cid), cid)
-        check('返回 PNG 图像', resp.headers.get('Content-Type') == 'image/png')
-        check('日志中可解析出明文', read_captcha_from_log(cid) is not None)
+    print('[1] 验证码接口')
+    cid, resp = get_captcha()
+    check('GET /api/captcha 返回 200', resp.status_code == 200)
+    check('响应头含 X-Captcha-ID', bool(cid), cid)
+    check('返回 PNG 图像', resp.headers.get('Content-Type') == 'image/png')
+    check('日志中可解析出明文', read_captcha_from_log(cid) is not None)
 
     # ---------- 2. 三类角色登录 ----------
     print('\n[2] 三类角色登录')
@@ -100,27 +105,25 @@ def main():
         check(f'{role} 登录({user})', ok,
               '' if ok else f'HTTP {r.status_code} {r.json().get("error", "")}')
 
-    if not LOG:
-        print('\n（跳过失败分支用例：需要验证码日志）')
-    else:
-        # ---------- 3. 失败分支 ----------
-        print('\n[3] 登录失败分支')
-        r = login(users.get('admin', 'admin'), DEFAULT_PASSWORD, 'admin', captcha_ok=False)
-        check('错误验证码 -> 400', r.status_code == 400, r.json().get('error', ''))
+    # ---------- 3. 失败分支 ----------
+    print('\n[3] 登录失败分支')
+    admin_user = users.get('admin', 'admin')
+    r = login(admin_user, DEFAULT_PASSWORD, 'admin', captcha_ok=False)
+    check('错误验证码 -> 400', r.status_code == 400, r.json().get('error', ''))
 
-        cid, _ = get_captcha()
-        code = read_captcha_from_log(cid)
-        body = {'username': users.get('admin', 'admin'), 'password': DEFAULT_PASSWORD,
-                'role': 'admin', 'captcha': code, 'captcha_id': cid}
-        check('正确验证码 -> 200', requests.post(f'{BASE}/api/login', json=body,
-                                                timeout=30).status_code == 200)
-        r = requests.post(f'{BASE}/api/login', json=body, timeout=30)
-        check('验证码重放 -> 400（一次性）', r.status_code == 400, r.json().get('error', ''))
+    cid, _ = get_captcha()
+    code = read_captcha_from_log(cid)
+    body = {'username': admin_user, 'password': DEFAULT_PASSWORD,
+            'role': 'admin', 'captcha': code, 'captcha_id': cid}
+    check('正确验证码 -> 200', requests.post(f'{BASE}/api/login', json=body,
+                                            timeout=30).status_code == 200)
+    r = requests.post(f'{BASE}/api/login', json=body, timeout=30)
+    check('验证码重放 -> 400（一次性）', r.status_code == 400, r.json().get('error', ''))
 
-        r = login(users.get('admin', 'admin'), 'wrong-password', 'admin')
-        check('密码错误 -> 401', r.status_code == 401)
-        r = login('__not_exist__', DEFAULT_PASSWORD, 'admin')
-        check('用户不存在 -> 401', r.status_code == 401)
+    r = login(admin_user, 'wrong-password', 'admin')
+    check('密码错误 -> 401', r.status_code == 401)
+    r = login('__not_exist__', DEFAULT_PASSWORD, 'admin')
+    check('用户不存在 -> 401', r.status_code == 401)
 
     # ---------- 4. JWT 鉴权 ----------
     print('\n[4] JWT 鉴权')
