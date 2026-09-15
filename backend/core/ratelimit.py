@@ -3,6 +3,7 @@
 从 app.py 抽出。基于进程内滑动窗口，多 worker 部署时不共享，
 应迁至 Redis（见 BASELINE 待办）。
 """
+import time
 from datetime import datetime
 from functools import wraps
 

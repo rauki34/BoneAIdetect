@@ -34,9 +34,14 @@ BLUEPRINTS = {
 # 蓝图模块中「路由函数名 -> 蓝图名」的映射在 PLAN 里由 BLUEPRINTS 推导
 # 目标模块 -> 待搬迁函数名
 PLAN = {
-    'backend/services/ai_service.py': [
-        'get_ai_settings', 'get_llm_client', 'generate_ai_advice_async',
-        '_build_assistant_messages', 'call_ai_assistant_api', 'get_mock_reply',
+    'backend/api/ai.py': [
+        'ai_assistant_chat_stream', 'ai_assistant_chat',
+        'ai_assistant_history', 'ai_assistant_sessions',
+    ],
+    'backend/api/message.py': [
+        'send_message', 'get_conversation', 'get_message_contacts',
+        'mark_messages_read', 'get_announcements',
+        'mark_announcement_read', 'get_unread_announcement_count',
     ],
 }
 
@@ -94,6 +99,10 @@ from flask import Blueprint, Response, current_app, jsonify, request
 
 from core.auth import get_current_user, require_auth, require_role
 from database import db, AIConversation
+from services.ai_service import (
+    _build_assistant_messages, call_ai_assistant_api, get_llm_client,
+)
+from services.llm_client import LLMError
 from utils.logger import logger
 
 bp = Blueprint('ai', __name__)
@@ -103,15 +112,18 @@ bp = Blueprint('ai', __name__)
 
 路由保留完整路径（不使用 url_prefix），确保 URL 与拆分前一致。
 """
-import json
+from datetime import datetime
 
 from flask import Blueprint, jsonify, request
+from sqlalchemy import func
 
 from core.auth import get_current_user, require_auth, require_role
-from core.validators import validate_username
-from database import db, Announcement, AnnouncementRead, DoctorPatientRelation, Message, User
-from datetime import datetime
-from sqlalchemy import func
+from core.helpers import log_operation
+from database import (
+    Announcement, AnnouncementRead, DoctorPatientRelation,
+    DoctorProfile, Message, PatientProfile, User, db,
+)
+from utils.logger import logger
 
 bp = Blueprint('message', __name__)
 
