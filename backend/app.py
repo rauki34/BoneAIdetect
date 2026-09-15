@@ -82,6 +82,9 @@ from core.captcha import check_captcha  # noqa: E402
 
 # 初始化数据库
 init_db(app)
+from core.security import filter_sensitive_content, detect_prompt_injection, sanitize_ai_input  # noqa: E402
+from core.ratelimit import check_rate_limit, rate_limit  # noqa: E402
+from core.auth import get_current_user, require_auth, require_admin, require_role  # noqa: E402
 
 # 在应用启动时迁移 JSON 数据（如果存在）
 with app.app_context():
@@ -264,305 +267,26 @@ def handle_unexpected_error(error):
 
 
 # ==================== AI内容过滤 ====================
-
-# 敏感词列表
-SENSITIVE_WORDS = [
-    '密码', 'password', '身份证', 'id card', 'credit card', '信用卡',
-    '银行卡', 'bank account', '社保', 'social security',
-    'api_key', 'secret', 'token', 'private key'
-]
-
-# 提示词注入检测模式
-PROMPT_INJECTION_PATTERNS = [
-    r'ignore\s+(previous|above|all)\s+instructions?',
-    r'forget\s+(everything|all|previous)',
-    r'you\s+are\s+now',
-    r'new\s+instructions?',
-    r'system\s*:\s*',
-    r'<\s*script\s*>',
-    r'javascript\s*:',
-    r'eval\s*\(',
-    r'exec\s*\(',
-]
+# SENSITIVE_WORDS / PROMPT_INJECTION_PATTERNS 及三个过滤函数已抽至 core.security
 
 
-def filter_sensitive_content(text):
-    """过滤AI回复中的敏感信息
-    
-    Args:
-        text: AI回复文本
-    
-    Returns:
-        str: 过滤后的文本
-    
-    需求: 7.4
-    """
-    if not text:
-        return text
-    
-    filtered_text = text
-    
-    # 过滤敏感词
-    for word in SENSITIVE_WORDS:
-        if word.lower() in filtered_text.lower():
-            # 用星号替换敏感词
-            pattern = re.compile(re.escape(word), re.IGNORECASE)
-            filtered_text = pattern.sub('***', filtered_text)
-    
-    return filtered_text
 
 
-def detect_prompt_injection(text):
-    """检测提示词注入攻击
-    
-    Args:
-        text: 用户输入文本
-    
-    Returns:
-        bool: 是否检测到注入攻击
-    
-    需求: 7.4
-    """
-    if not text:
-        return False
-    
-    text_lower = text.lower()
-    
-    # 检查注入模式
-    for pattern in PROMPT_INJECTION_PATTERNS:
-        if re.search(pattern, text_lower, re.IGNORECASE):
-            return True
-    
-    return False
 
 
-def sanitize_ai_input(text):
-    """清理AI输入内容
-    
-    Args:
-        text: 用户输入文本
-    
-    Returns:
-        str: 清理后的文本
-    
-    需求: 7.4
-    """
-    if not text:
-        return text
-    
-    # 移除HTML标签
-    text = re.sub(r'<[^>]+>', '', text)
-    
-    # 移除JavaScript代码
-    text = re.sub(r'javascript\s*:', '', text, flags=re.IGNORECASE)
-    
-    # 限制长度
-    max_length = 2000
-    if len(text) > max_length:
-        text = text[:max_length]
-    
-    return text.strip()
 
 
 # ==================== 限流保护 ====================
 # RATE_LIMIT_CONFIG / rate_limit_storage / rate_limit_lock 已抽至 core.state
 
 
-def check_rate_limit(user_id, limit_type='api_general'):
-    """检查用户是否超过限流
-    
-    Args:
-        user_id: 用户ID
-        limit_type: 限流类型 ('ai_chat' 或 'api_general')
-    
-    Returns:
-        tuple: (是否允许, 剩余请求数)
-    
-    需求: 7.3
-    """
-    config = RATE_LIMIT_CONFIG.get(limit_type, RATE_LIMIT_CONFIG['api_general'])
-    max_requests = config['max_requests']
-    time_window = config['time_window']
-    
-    with rate_limit_lock:
-        current_time = time.time()
-        key = f"{user_id}:{limit_type}"
-        
-        # 获取用户的请求记录
-        requests = rate_limit_storage[key]
-        
-        # 移除过期的请求记录
-        requests = [req_time for req_time in requests if current_time - req_time < time_window]
-        rate_limit_storage[key] = requests
-        
-        # 检查是否超过限制
-        if len(requests) >= max_requests:
-            return False, 0
-        
-        # 记录本次请求
-        requests.append(current_time)
-        remaining = max_requests - len(requests)
-        
-        return True, remaining
 
 
-def rate_limit(limit_type='api_general'):
-    """限流装饰器
-    
-    Args:
-        limit_type: 限流类型
-    
-    需求: 7.3
-    """
-    def decorator(f):
-        @wraps(f)
-        def decorated_function(*args, **kwargs):
-            user = get_current_user()
-            if not user:
-                return jsonify({"error": "未登录"}), 401
-            
-            allowed, remaining = check_rate_limit(user.id, limit_type)
-            
-            if not allowed:
-                # 记录限流日志
-                log_operation(
-                    description=f"限流触发: 用户{user.username}, 类型{limit_type}",
-                    success=False,
-                    error_msg="请求频率超过限制"
-                )
-                
-                return jsonify({
-                    "error": "请求过于频繁,请稍后再试",
-                    "error_code": "RATE_LIMIT_EXCEEDED",
-                    "timestamp": datetime.utcnow().isoformat()
-                }), 429
-            
-            # 在响应头中添加限流信息
-            response = f(*args, **kwargs)
-            if isinstance(response, tuple):
-                response_obj, status_code = response[0], response[1]
-            else:
-                response_obj, status_code = response, 200
-            
-            # 添加限流头
-            if hasattr(response_obj, 'headers'):
-                response_obj.headers['X-RateLimit-Remaining'] = str(remaining)
-                response_obj.headers['X-RateLimit-Limit'] = str(RATE_LIMIT_CONFIG[limit_type]['max_requests'])
-            
-            return response_obj, status_code
-        
-        return decorated_function
-    return decorator
 
 
-# ==================== 权限验证装饰器 ====================
 
-def get_current_user():
-    """获取当前登录用户
 
-    过渡期采用**双模式**认证，新旧并存以便灰度切换：
-      1. JWT（Authorization: Bearer <token>）—— 新方式，有签名校验
-      2. X-Username 请求头 —— 旧方式，**无任何校验，可被任意伪造**
 
-    旧方式仅用于兼容尚未升级的客户端，会打出 WARNING 日志。
-    待观察期内不再出现该日志后，删除下方"方式二"分支。
-    """
-    # --- 方式一：JWT ---
-    try:
-        # optional=True：无 token 时返回 None 而不报错；
-        # 但 token 存在且非法时会抛异常，需一并吞掉走旧方式兜底
-        verify_jwt_in_request(optional=True)
-        identity = get_jwt_identity()
-    except Exception:
-        identity = None
-
-    if identity:
-        return User.query.filter_by(username=identity).first()
-
-    # --- 方式二：旧 X-Username（TODO: 全量切换后删除）---
-    username = request.headers.get('X-Username')
-    if username:
-        logger.warning(
-            '检测到已废弃的 X-Username 认证: %s'
-            '（该方式无签名校验、可被伪造，将在后续版本移除）',
-            username,
-        )
-        return User.query.filter_by(username=username).first()
-
-    return None
-
-def require_auth(f):
-    """要求登录的装饰器"""
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        user = get_current_user()
-        if not user:
-            log_operation("认证失败:未登录或登录已过期", success=False, error_msg="未登录")
-            return jsonify({
-                "error": "未登录或登录已过期",
-                "error_code": "AUTH_001",
-                "timestamp": datetime.utcnow().isoformat()
-            }), 401
-        return f(*args, **kwargs)
-    return decorated_function
-
-def require_admin(f):
-    """要求管理员权限的装饰器"""
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        user = get_current_user()
-        if not user:
-            log_operation("认证失败:未登录或登录已过期", success=False, error_msg="未登录")
-            return jsonify({
-                "error": "未登录或登录已过期",
-                "error_code": "AUTH_001",
-                "timestamp": datetime.utcnow().isoformat()
-            }), 401
-        if user.role != 'admin':
-            log_operation(f"权限验证失败:用户{user.username}尝试访问管理员功能", success=False, error_msg="需要管理员权限")
-            return jsonify({
-                "error": "需要管理员权限",
-                "error_code": "AUTH_002",
-                "timestamp": datetime.utcnow().isoformat()
-            }), 403
-        return f(*args, **kwargs)
-    return decorated_function
-
-def require_role(*allowed_roles):
-    """通用角色验证装饰器,支持多角色验证
-    
-    Args:
-        *allowed_roles: 允许访问的角色列表,如 'admin', 'doctor', 'patient'
-    
-    Returns:
-        装饰器函数
-    
-    Example:
-        @require_role('admin', 'doctor')
-        def some_endpoint():
-            pass
-    """
-    def decorator(f):
-        @wraps(f)
-        def decorated_function(*args, **kwargs):
-            user = get_current_user()
-            if not user:
-                log_operation("认证失败:未登录或登录已过期", success=False, error_msg="未登录")
-                return jsonify({
-                    "error": "未登录或登录已过期",
-                    "error_code": "AUTH_001",
-                    "timestamp": datetime.utcnow().isoformat()
-                }), 401
-            if user.role not in allowed_roles:
-                log_operation(f"权限验证失败:用户{user.username}(角色:{user.role})尝试访问需要{allowed_roles}角色的功能", success=False, error_msg="权限不足")
-                return jsonify({
-                    "error": "权限不足",
-                    "error_code": "AUTH_002",
-                    "timestamp": datetime.utcnow().isoformat()
-                }), 403
-            return f(*args, **kwargs)
-        return decorated_function
-    return decorator
 
 
 # ==================== 用户认证接口 ====================

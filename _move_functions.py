@@ -18,8 +18,13 @@ DRY_RUN = '--apply' not in sys.argv
 
 # 目标模块 -> 待搬迁函数名
 PLAN = {
-    'backend/core/helpers.py': ['log_operation'],
-    'backend/core/captcha.py': ['check_captcha'],
+    'backend/core/security.py': [
+        'filter_sensitive_content', 'detect_prompt_injection', 'sanitize_ai_input',
+    ],
+    'backend/core/ratelimit.py': ['check_rate_limit', 'rate_limit'],
+    'backend/core/auth.py': [
+        'get_current_user', 'require_auth', 'require_admin', 'require_role',
+    ],
 }
 
 MODULE_HEADERS = {
@@ -48,6 +53,67 @@ from utils.logger import logger
 import time
 
 from core.state import captcha_store
+
+''',
+    'backend/core/security.py': '''"""AI 内容安全
+
+从 app.py 抽出：敏感词过滤、提示词注入检测、输入净化。
+
+注意：当前为黑名单式防护，可被同义改写 / 编码绕过。
+"""
+import re
+
+# 敏感词列表
+SENSITIVE_WORDS = [
+    '密码', 'password', '身份证', 'id card', 'credit card', '信用卡',
+    '银行卡', 'bank account', '社保', 'social security',
+    'api_key', 'secret', 'token', 'private key'
+]
+
+# 提示词注入检测模式
+PROMPT_INJECTION_PATTERNS = [
+    r'ignore\\s+(previous|above|all)\\s+instructions?',
+    r'forget\\s+(everything|all|previous)',
+    r'you\\s+are\\s+now',
+    r'new\\s+instructions?',
+    r'system\\s*:\\s*',
+    r'<\\s*script\\s*>',
+    r'javascript\\s*:',
+    r'eval\\s*\\(',
+    r'exec\\s*\\(',
+]
+
+
+''',
+    'backend/core/ratelimit.py': '''"""请求限流
+
+从 app.py 抽出。基于进程内滑动窗口，多 worker 部署时不共享，
+应迁至 Redis（见 BASELINE 待办）。
+"""
+from datetime import datetime
+from functools import wraps
+
+from flask import jsonify
+
+from core.auth import get_current_user
+from core.helpers import log_operation
+from core.state import RATE_LIMIT_CONFIG, rate_limit_lock, rate_limit_storage
+
+''',
+    'backend/core/auth.py': '''"""认证与权限装饰器
+
+从 app.py 抽出。当前为 JWT + X-Username 双模式过渡期实现，
+全量切换后移除兜底分支。
+"""
+from datetime import datetime
+from functools import wraps
+
+from flask import jsonify, request
+from flask_jwt_extended import get_jwt_identity, verify_jwt_in_request
+
+from core.helpers import log_operation
+from database import User
+from utils.logger import logger
 
 ''',
 }
