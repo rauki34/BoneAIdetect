@@ -21,16 +21,25 @@ CAPTCHA_TIMEOUT = 300  # 5分钟过期
 
 app = Flask(__name__)
 
-# 配置session - 从环境变量读取 SECRET_KEY，默认为开发环境密钥
-app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
-app.config['PERMANENT_SESSION_LIFETIME'] = 3600  # 1小时
-app.config['SESSION_COOKIE_SAMESITE'] = 'None'  # 允许跨域携带cookie
-app.config['SESSION_COOKIE_SECURE'] = False  # 开发环境使用HTTP
+# 加载 .env 文件（可选：未安装 python-dotenv 时自动跳过，直接读取系统环境变量）
+try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env'))
+except ImportError:
+    pass
 
-# 全局CORS配置 - 允许所有来源
+# 从 config.py 统一加载配置
+# 优先级：环境变量 > config.py 默认值
+# 通过 FLASK_ENV 切换配置类：development（默认） / production
+from config import config_map
+app.config.from_object(
+    config_map.get(os.environ.get('FLASK_ENV', 'development'), config_map['development'])
+)
+
+# 全局CORS配置
 CORS(app, resources={
     r"/*": {
-        "origins": ["http://localhost:5173", "http://127.0.0.1:5173"],
+        "origins": app.config['CORS_ORIGINS'],
         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         "allow_headers": ["Content-Type", "Authorization", "X-Username"],
         "expose_headers": ["X-Captcha-ID"],  # 暴露自定义header
@@ -41,11 +50,9 @@ CORS(app, resources={
 from flask_migrate import Migrate
 migrate = Migrate(app, db)      # 注册 migrate 扩展
 
-# 配置数据库 - 使用绝对路径确保数据库位置正确
+# 项目根目录（上传目录、结果目录、模型目录均基于此）
+# 数据库 URI 与 SQLALCHEMY_TRACK_MODIFICATIONS 已由 config.py 统一设置
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(BASE_DIR, 'instance', 'bone_detection.db')
-app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{DB_PATH}'
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 # 初始化数据库
 init_db(app)
@@ -6705,4 +6712,5 @@ def get_mock_reply(messages):
 
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    # debug 由 FLASK_ENV 决定：development=True（默认，同改造前行为） / production=False
+    app.run(debug=app.config.get('DEBUG', True))
