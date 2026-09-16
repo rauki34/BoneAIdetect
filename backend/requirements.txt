@@ -30,6 +30,15 @@ transformers==4.57.3
 accelerate==1.12.0
 huggingface-hub==0.36.0
 
+# ==================== RAG / Knowledge Base ====================
+# 注意：sentence-transformers 必须 <5，6.x 起强制 transformers>=5.0，
+# 会把上面钉死的 transformers==4.57.3 顶掉（ultralytics 未验证过该组合）
+sentence-transformers==3.4.1
+scikit-learn==1.9.1
+jieba==0.42.1
+rank_bm25==0.2.2
+pypdf==6.19.0
+
 # ==================== Image Processing ====================
 opencv-python==4.12.0.88
 Pillow==12.1.0

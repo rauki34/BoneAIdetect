@@ -73,7 +73,10 @@ def get_llm_client():
     # 本地服务地址来自 config.py（环境变量 AI_SERVICE_URL），
     # 仅当数据库中未单独配置 ai_api_url 时生效
     if ai_config.get('provider') == 'local' and not ai_config.get('api_url'):
-        ai_config['api_url'] = app.config.get('AI_SERVICE_URL', '')
+        # 原实现引用裸 app（本模块从未导入它）→ 一旦走到这个分支就 NameError。
+        # 而默认配置恰恰是 provider=local 且数据库未配置 api_url，
+        # 也就是这个分支一旦被执行就是崩溃。
+        ai_config['api_url'] = current_app.config.get('AI_SERVICE_URL', '')
     return LLMClient.from_settings(ai_config)
 
 def generate_ai_advice_async(history_id, detections):
@@ -83,7 +86,16 @@ def generate_ai_advice_async(history_id, detections):
         history_id: 检测历史记录ID
         detections: 检测结果列表
     """
+    # 在**请求线程里**取出真实 app 对象再进后台线程。
+    # 线程内没有请求上下文，原实现直接调 current_app 会抛
+    # "Working outside of application context"——包括它自己的
+    # get_ai_settings() 数据库查询，也就是说这个函数此前根本跑不起来。
+    app = current_app._get_current_object()
+
     def generate_advice():
+      # 整个线程体都在应用上下文里跑：get_ai_settings() / get_llm_client()
+      # 都要查 SystemSettings 表，只包住最后的保存是不够的
+      with app.app_context():
         try:
             # 构建提示词
             detection_summary = []
@@ -146,17 +158,16 @@ def generate_ai_advice_async(history_id, detections):
                     medical_advice[current_section] += line + '\n'
             
             # 保存到数据库
-            with current_app.app_context():
-                history = db.session.get(DetectionHistory, history_id)
-                if history:
-                    history.medical_advice = json.dumps(medical_advice, ensure_ascii=False)
-                    db.session.commit()
-                    logger.info(f"AI建议生成成功: history_id={history_id}")
-                else:
-                    logger.info(f"历史记录不存在: history_id={history_id}")
-                    
+            history = db.session.get(DetectionHistory, history_id)
+            if history:
+                history.medical_advice = json.dumps(medical_advice, ensure_ascii=False)
+                db.session.commit()
+                logger.info("AI建议生成成功: history_id=%s", history_id)
+            else:
+                logger.info("历史记录不存在: history_id=%s", history_id)
+
         except Exception as e:
-            logger.error(f"生成AI建议失败: history_id={history_id}, error={e}")
+            logger.error("生成AI建议失败: history_id=%s, error=%s", history_id, e)
     
     # 启动后台线程
     thread = threading.Thread(target=generate_advice)

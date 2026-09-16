@@ -11,8 +11,14 @@ UPLOADS = os.path.join(BASE_DIR, "uploads")
 RESULTS = os.path.join(BASE_DIR, "results")
 MODELS_DIR = os.path.join(BASE_DIR, "models")
 
+# 知识库（阶段 7）：随仓库提交的语料 + 运行期上传，两者分开存放
+KNOWLEDGE_DIR = os.path.join(BASE_DIR, "knowledge")
+KNOWLEDGE_CORPUS_DIR = os.path.join(KNOWLEDGE_DIR, "corpus")
+KNOWLEDGE_UPLOAD_DIR = os.path.join(KNOWLEDGE_DIR, "uploads")
+
 # 启动时确保目录存在
-for _d in (UPLOADS, RESULTS, MODELS_DIR):
+for _d in (UPLOADS, RESULTS, MODELS_DIR,
+           KNOWLEDGE_CORPUS_DIR, KNOWLEDGE_UPLOAD_DIR):
     os.makedirs(_d, exist_ok=True)
 
 # 预置模型：模型键 -> 权重文件路径

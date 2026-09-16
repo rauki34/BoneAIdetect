@@ -45,9 +45,53 @@ def safe_json_loads(value, default=None):
         return default
 
 
+# ==================== pgvector 向量列 ====================
+
+# 向量维度：BAAI/bge-m3 = 1024。
+# 这是**数据库 schema 的一部分**（决定 DDL 里的 vector(1024)），
+# 因此不做成可配置项——配置改了而列宽没改只会更难排查。
+# 换模型时由 services/rag/embedder.py 里的维度断言负责报错。
+EMBEDDING_DIM = 1024
+
+try:
+    from pgvector.sqlalchemy import Vector as _PGVector
+except ImportError:      # 未安装 pgvector：非 PG 环境仍可启动，向量能力关闭
+    _PGVector = None
+
+
+class VectorType(db.TypeDecorator):
+    """pgvector 向量列
+
+    仅在 PostgreSQL 方言下渲染为 vector(1024)；其他方言退化为 TEXT 并以
+    JSON 存储。原因：config.py 在未设置 DATABASE_URL 时默认回退 SQLite，
+    装了向量列不能连累那条降级启动路径。
+    """
+    impl = db.Text
+    cache_ok = True
+
+    def load_dialect_impl(self, dialect):
+        if dialect.name == 'postgresql' and _PGVector is not None:
+            return dialect.type_descriptor(_PGVector(EMBEDDING_DIM))
+        return dialect.type_descriptor(db.Text())
+
+    def process_bind_param(self, value, dialect):
+        if value is None:
+            return None
+        if dialect.name == 'postgresql' and _PGVector is not None:
+            return value                      # pgvector 自行序列化 list[float]
+        return json.dumps([float(x) for x in value])
+
+    def process_result_value(self, value, dialect):
+        if value is None:
+            return None
+        if dialect.name == 'postgresql' and _PGVector is not None:
+            return value
+        return safe_json_loads(value, [])
+
+
 def get_display_name(user, fallback_attr='username'):
     """获取用户显示名称
-    
+
     Args:
         user: 用户对象
         fallback_attr: 备用属性名
@@ -234,9 +278,12 @@ class AIConversation(db.Model):
     session_id = db.Column(db.String(50), nullable=False, index=True)  # 会话ID
     message_type = db.Column(db.String(20), nullable=False)  # user/assistant
     message_content = db.Column(db.Text, nullable=False)
+    # RAG 引用溯源结果（JSON 数组字符串）。不存这一列的话，
+    # 页面一刷新引用卡片就没了——回答正文还留着自己的 [1][2] 角标。
+    references = db.Column(db.Text)
     context_report_id = db.Column(db.Integer, db.ForeignKey('detection_history.id'))  # 关联的报告
     created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
-    
+
     # 关系定义
     patient = db.relationship('User', backref='ai_conversations')
     context_report = db.relationship('DetectionHistory', backref='ai_conversations')
@@ -254,6 +301,7 @@ class AIConversation(db.Model):
             'session_id': self.session_id,
             'message_type': self.message_type,
             'message_content': self.message_content,
+            'references': safe_json_loads(self.references, []),
             'context_report_id': self.context_report_id,
             'created_at': to_local_time(self.created_at)
         }
@@ -838,6 +886,124 @@ class DoctorRegistration(db.Model):
         }
 
 
+# ==================== 知识库（RAG，阶段 7） ====================
+
+class KnowledgeDoc(db.Model):
+    """知识库文档
+
+    共享知识库与患者个人病历共用一张表：
+    - 共享文档：patient_id 为 NULL
+    - 个人文档：patient_id = 病历所属患者
+
+    合并的理由：混合检索的 RRF 融合需要一份可比的候选列表，拆两张表意味着
+    2×（向量+BM25）四次查询、两套去重、以及跨语料不可比的分数。
+    隔离靠严格的口径维持——共享行 patient_id IS NULL，个人行 patient_id = 属主，
+    所有读路径都套 RetrievalScope 过滤（见 services/rag/retriever.py）。
+    """
+    __tablename__ = 'knowledge_docs'
+
+    id = db.Column(db.Integer, primary_key=True)
+    title = db.Column(db.String(255), nullable=False)
+    # guideline / classification / drug / rehab / anatomy / textbook / record / other
+    doc_type = db.Column(db.String(50), default='other', index=True)
+    department = db.Column(db.String(100))
+    source = db.Column(db.String(500))       # 出处：URL 或文献引用
+    # public=公开资料原文 | curated=本项目整理摘要 | patient_record=患者个人病历
+    origin = db.Column(db.String(20), default='curated', index=True)
+    language = db.Column(db.String(10), default='zh')
+    file_path = db.Column(db.String(500))    # 相对 KNOWLEDGE_DIR；DB 派生的病历为 NULL
+    file_hash = db.Column(db.String(64), index=True)   # sha256，幂等重入库依据
+    file_size = db.Column(db.Integer)
+    mime_type = db.Column(db.String(100))
+    patient_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True, index=True)
+    uploaded_by = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    status = db.Column(db.String(20), default='pending', index=True)  # pending/processing/ready/failed
+    error_msg = db.Column(db.Text)
+    chunk_count = db.Column(db.Integer, default=0)
+    char_count = db.Column(db.Integer, default=0)
+    doc_meta = db.Column(db.Text)            # JSON：frontmatter 其余字段 + 原始文件名
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    chunks = db.relationship(
+        'KnowledgeChunk', backref='doc', lazy='dynamic',
+        cascade='all, delete-orphan', foreign_keys='KnowledgeChunk.doc_id',
+    )
+    patient = db.relationship('User', foreign_keys=[patient_id])
+    uploader = db.relationship('User', foreign_keys=[uploaded_by])
+
+    def to_dict(self, with_content=False):
+        return {
+            'id': self.id,
+            'title': self.title,
+            'doc_type': self.doc_type,
+            'department': self.department,
+            'source': self.source,
+            'origin': self.origin,
+            'language': self.language,
+            'patient_id': self.patient_id,
+            'patient_name': get_display_name(self.patient),
+            'uploaded_by': self.uploaded_by,
+            'status': self.status,
+            'error_msg': self.error_msg,
+            'chunk_count': self.chunk_count,
+            'char_count': self.char_count,
+            'file_size': self.file_size,
+            'mime_type': self.mime_type,
+            'doc_meta': safe_json_loads(self.doc_meta, {}),
+            'is_shared': self.patient_id is None,
+            'created_at': to_local_time(self.created_at),
+            'updated_at': to_local_time(self.updated_at),
+        }
+
+    def __repr__(self):
+        return f'<KnowledgeDoc {self.id} {self.title[:20]}>'
+
+
+class KnowledgeChunk(db.Model):
+    """知识库切片
+
+    patient_id 从所属文档反规范化下来，使隔离过滤是单表条件、无需 JOIN，
+    因而能作为 ANN 查询的前置过滤（否则只能先取后筛，召回会被稀释）。
+    """
+    __tablename__ = 'knowledge_chunks'
+
+    id = db.Column(db.Integer, primary_key=True)
+    doc_id = db.Column(
+        db.Integer,
+        db.ForeignKey('knowledge_docs.id', ondelete='CASCADE'),
+        nullable=False, index=True,
+    )
+    chunk_index = db.Column(db.Integer, nullable=False, default=0)
+    content = db.Column(db.Text, nullable=False)
+    token_count = db.Column(db.Integer, default=0)
+    section = db.Column(db.String(255))      # 标题路径，如 "3 分型标准 > 3.2 股骨远端"
+    page = db.Column(db.Integer)             # 1-based；MD/TXT 无页概念时为 NULL
+    patient_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True, index=True)
+    embedding = db.Column(VectorType)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        db.Index('ix_kb_chunks_doc_chunk', 'doc_id', 'chunk_index'),
+        db.Index('ix_kb_chunks_patient_doc', 'patient_id', 'doc_id'),
+    )
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'doc_id': self.doc_id,
+            'chunk_index': self.chunk_index,
+            'content': self.content,
+            'token_count': self.token_count,
+            'section': self.section,
+            'page': self.page,
+            'is_personal': self.patient_id is not None,
+        }
+
+    def __repr__(self):
+        return f'<KnowledgeChunk {self.id} doc={self.doc_id}>'
+
+
 # ==================== 数据库初始化函数 ====================
 
 def init_db(app):
@@ -847,10 +1013,36 @@ def init_db(app):
     db.init_app(app)
     
     with app.app_context():
-        # 创建所有表
-        db.create_all()
-        logger.info("✅ 数据库表已创建")
-        
+        # pgvector 引导：CREATE EXTENSION 必须在 create_all 之前，否则首次在
+        # 新机器上建 knowledge_chunks 会报 type "vector" does not exist
+        # （此前是手工执行的，仓库里没有任何记录）。
+        # 而 HNSW / GIN 索引和新增列是 create_all 做不到的，必须在其后补。
+        try:
+            from services.rag.store import (
+                ensure_columns, ensure_extensions, ensure_indexes,
+            )
+            _ext = ensure_extensions()
+            db.create_all()
+            _idx = ensure_indexes()
+            _col = ensure_columns()
+            logger.info(
+                "✅ 数据库表已创建（pgvector 扩展=%s，索引=%s，新增列=%s）",
+                _ext.get('vector'), _idx, _col,
+            )
+        except Exception as e:
+            logger.warning("pgvector 引导失败，知识库检索将降级: %s", e, exc_info=True)
+            db.create_all()
+
+        # 回收中断的入库任务，避免 processing 状态的行永远留在管理界面上
+        try:
+            from services.rag.store import recover_stale_docs
+            _stale = recover_stale_docs()
+            if _stale:
+                logger.info("✅ 已回收 %d 个中断的入库任务", _stale)
+        except Exception as e:
+            logger.warning("回收中断入库任务失败: %s", e)
+
+
         # 初始化默认admin用户（如果不存在）
         admin_user = User.query.filter_by(username='admin').first()
         if not admin_user:
