@@ -107,7 +107,6 @@ class MedicalSplitter:
 
     CHUNK_SIZE = 512
     OVERLAP = 64
-    MIN_CHUNK_TOKENS = 60      # 只有标题没有正文的块并入下一块
     # 正文的硬上限。之所以不是 900：缓冲检查只统计正文，而成品切片还要
     # 加上重叠回带（≤64）与 `标题 · 章节` 头部，三者相加仍需留出余量
     # 才能稳稳落在嵌入窗口（1024）之内。820 对应成品约 900 token。
@@ -136,8 +135,12 @@ class MedicalSplitter:
                 titles = titles[1:]
             return ' > '.join(titles)
 
-        def flush():
-            """结算当前缓冲为一个切片，并把尾句留作下一块的重叠"""
+        def flush(carry_overlap=True):
+            """结算当前缓冲为一个切片，并把尾句留作下一块的重叠
+
+            carry_overlap=False 用于"后面紧跟原子块"的场合：此时回带没有意义，
+            表格块本来也不接受重叠，白白把上一段复制一遍。
+            """
             nonlocal buf, buf_tokens, pending, pending_section
             if not buf:
                 return
@@ -154,7 +157,7 @@ class MedicalSplitter:
             # 按句切分会在表格行内部乱切，结果是行被重复计入两个切片，
             # 且拼出的片段不是合法表格。表格靠重复表头保持自解释，不需要重叠。
             last_kind = buf[-1][0] if buf else 'para'
-            pending = ('' if last_kind in ('table', 'code')
+            pending = ('' if (not carry_overlap or last_kind in ('table', 'code'))
                        else self._tail_sentences(body, self.OVERLAP))
             pending_section = buf_section
             buf, buf_tokens = [], 0
@@ -190,9 +193,24 @@ class MedicalSplitter:
             text = block[1]
             tokens = count_tokens(text)
 
-            # 表格/代码块不与正文混装，否则后续按尺寸切分时会把它拦腰截断
-            if kind in ('table', 'code') and buf_tokens > 0:
-                flush()
+            if kind in ('table', 'code'):
+                # 原子块**并入当前缓冲**，让"本节的引言 + 它的表格"留在同一个
+                # 切片里。曾经的写法是"表格前先 flush"，结果是引言段独立成片、
+                # 紧接着又被重叠回带复制进表格片，界面上表现为两条一模一样的引用。
+                #
+                # 但缓冲快满时不能硬并：成品切片还要加头部与重叠，必须落在
+                # 嵌入窗口之内。此时切开是必要的，且**不回带重叠**——
+                # 回带只会把刚切出去的引言再复制一遍，正是上面要避免的。
+                if buf_tokens and buf_tokens + tokens > self.MAX_CHUNK_TOKENS:
+                    flush(carry_overlap=False)
+                if not buf:
+                    start()
+                if kind == 'table' and tokens > self.MAX_CHUNK_TOKENS:
+                    logger.info('表格块超过硬上限（%d token），整体保留不切分', tokens)
+                    text = f'<!-- 表格较大，未截断 -->\n{text}'
+                buf.append((kind, text))
+                buf_tokens += tokens
+                continue
 
             if buf_tokens and buf_tokens + tokens > self.MAX_CHUNK_TOKENS:
                 flush()
@@ -200,50 +218,19 @@ class MedicalSplitter:
             if not buf:
                 start()
 
-            if kind == 'table' and tokens > self.MAX_CHUNK_TOKENS:
-                # 超长表格整体保留，并明确标注未被截断
-                logger.info('表格块超过硬上限（%d token），整体保留不切分', tokens)
-                text = f'<!-- 表格较大，未截断 -->\n{text}'
-
             buf.append((kind, text))
             buf_tokens += tokens
 
         flush()
-        return self._merge_heading_only(chunks)
+        return chunks
 
-    def _merge_heading_only(self, chunks):
-        """把"只有标题没有正文"的切片并入相邻切片
-
-        连续两个标题（`## 2 分型标准` 紧跟 `### 2.1 AO/OTA`）会产生一个只有
-        标题行的切片，它对检索毫无价值。并入**下一块**并沿用下一块的 section：
-        下一个标题是当前标题的子节点，用更精确的子节点标注仍然成立；
-        并入上一块则会让正文挂到错误的章节下。
-        """
-        result = []
-        pending = []            # 攒着的空标题块，等下一个有正文的块来收编
-
-        for chunk in chunks:
-            if chunk.token_count < self.MIN_CHUNK_TOKENS:
-                pending.append(chunk)
-                continue
-            if pending:
-                bodies = [c.content for c in pending] + [chunk.content]
-                chunk.content = '\n\n'.join(bodies)
-                chunk.token_count = count_tokens(chunk.content)
-                pending = []
-            result.append(chunk)
-
-        if pending:
-            # 文档以标题结尾（没有后续正文），只能往前并
-            if result:
-                tail = result[-1]
-                tail.content = '\n\n'.join([tail.content] + [c.content for c in pending])
-                tail.token_count = count_tokens(tail.content)
-            else:
-                result = pending        # 整篇只有一个标题，保持原样
-        for i, chunk in enumerate(result):
-            chunk.chunk_index = i
-        return result
+    # 曾经有一个 _merge_heading_only()，把"只有标题没有正文"的切片并入相邻切片。
+    # 已删除，原因是它防的是一个**不可能发生**的情况、却会破坏真实数据：
+    #   flush() 在缓冲为空时直接返回，所以两个相邻标题根本不会产生切片，
+    #   "只有标题的块"无从谈起；而该规则按 token 数（<60）判定，
+    #   于是把合法的短正文段落也当成空标题块，并入下一节并沿用了下一节的
+    #   section —— 切片于是带着 2.1 的标注装着第 2 节的引言。
+    # 现在短切片保持独立：切片偏小只是效率问题，标注错位是正确性问题。
 
     def _explode_oversized(self, blocks):
         """把超长块拆成多个块

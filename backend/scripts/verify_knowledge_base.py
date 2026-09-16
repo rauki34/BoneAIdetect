@@ -110,10 +110,12 @@ def main():
             "('public','curated','patient_record')")).scalar()
         check('文档 origin 取值合法', bad_origin == 0, f'非法 {bad_origin}')
 
+        # 只对**入库成功**的文档要求出处：扫描件等解析失败的记录
+        # 从未读到 frontmatter，没有 source 是正常的，不该算问题
         no_source = c.execute(text(
-            "SELECT COUNT(*) FROM knowledge_docs WHERE source IS NULL OR source=''")).scalar()
-        # 出处是引用溯源的立身之本，共享语料不允许为空
-        check('共享语料均有出处(source)', no_source == 0, f'缺失 {no_source}')
+            "SELECT COUNT(*) FROM knowledge_docs "
+            "WHERE status='ready' AND (source IS NULL OR source='')")).scalar()
+        check('入库成功的文档均有出处(source)', no_source == 0, f'缺失 {no_source}')
 
         bad_count = c.execute(text("""
             SELECT COUNT(*) FROM (SELECT d.id FROM knowledge_docs d
@@ -147,6 +149,59 @@ def main():
     with_section = KnowledgeChunk.query.count() - missing_section
     check('切片带章节信息（用于引用溯源）', with_section > 0,
           f'{with_section}/{KnowledgeChunk.query.count()} 条有 section')
+
+    # 同一文档内不得出现互相重复的切片。
+    # 重叠回带与"表格前先 flush"曾经联手制造出这种切片：引言段独立成片，
+    # 紧接着又被回带复制进表格片，界面上表现为两条一模一样的引用。
+    # 这一条此前没有断言，所以那类问题在 36 项全绿的情况下溜了过去。
+    # 注意比较的是**正文**而不是整段：切片内容形如 `标题 · 章节\n\n正文`，
+    # 同一节的英文切片前 80 字往往完全相同（都是那个长标题 + 章节名），
+    # 直接比前缀会把整篇文档的切片两两判为重复。
+    # 只比**同一章节内**的正文。跨章节的重复是原文本身如此（例如某指南在
+    # 每种双膦酸盐下都写了一遍同样措辞的"副作用"小节），不是切分管线的问题；
+    # 而同一章节内出现两份相同正文，就只可能是重叠回带之类的管线缺陷
+    # （此前的 2.3 33-C 重复正是这一类）。
+    dup_pairs = db.session.execute(text("""
+        SELECT a.doc_id, a.id, b.id, a.section
+        FROM knowledge_chunks a JOIN knowledge_chunks b
+          ON a.doc_id = b.doc_id AND a.id < b.id
+         AND coalesce(a.section, '') = coalesce(b.section, '')
+         AND substring(a.content from position(E'\\n\\n' in a.content) + 2 for 80)
+           = substring(b.content from position(E'\\n\\n' in b.content) + 2 for 80)
+    """)).fetchall()
+    check('同一章节内正文无重复切片', len(dup_pairs) == 0,
+          f'重复 {len(dup_pairs)} 对，例如 chunk {dup_pairs[0][1]}/{dup_pairs[0][2]} '
+          f'({dup_pairs[0][3]})' if dup_pairs else '')
+
+    # 切片的 section 必须是原文真实存在的标题路径（防止标注凭空产生）
+    invalid_sections = []
+    for doc in KnowledgeDoc.query.filter(KnowledgeDoc.status == 'ready').limit(50):
+        if not doc.file_path or not pathlib.Path(doc.file_path).exists():
+            continue
+        try:
+            loaded = load_document(doc.file_path)
+        except Exception:
+            continue
+        real_paths = set()
+        stack = []
+        for line in loaded.text.split('\n'):
+            m = re.match(r'^(#{1,6})\s+(.*)$', line.strip())
+            if not m:
+                continue
+            level, heading = len(m.group(1)), m.group(2).strip()
+            while stack and stack[-1][0] >= level:
+                stack.pop()
+            stack.append((level, heading))
+            titles = [t for _, t in stack]
+            if titles and titles[0].strip() == (loaded.meta.get('title') or '').strip():
+                titles = titles[1:]
+            real_paths.add(' > '.join(titles))
+        for chunk in doc.chunks.all():
+            if chunk.section and chunk.section not in real_paths:
+                invalid_sections.append(f'{doc.title}#{chunk.chunk_index}: {chunk.section}')
+    check('切片章节标注均来自原文真实标题', len(invalid_sections) == 0,
+          f'{len(invalid_sections)} 条不符，例如 {invalid_sections[0]}'
+          if invalid_sections else '抽查 50 篇')
 
     # 切片确定性：同一文件两次切片结果应一致
     from services.rag.loader import load_document

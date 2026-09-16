@@ -1593,11 +1593,13 @@ ${aiInterpretation}
   try {
     ElMessage.info('正在生成医生诊断内容...')
     
+    // 60000 是接入 RAG 之前的余量；现在多了一次检索（约 2s）
+    // 且带参考资料的回答更长，放宽到 180s
     const res = await axios.post('/api/interpret', {
       detections: report.detections || [],
       prompt: prompt
     }, {
-      timeout: 60000
+      timeout: 180000
     })
     
     if (res.data.success) {

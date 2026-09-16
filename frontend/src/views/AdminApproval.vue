@@ -2681,7 +2681,8 @@ const testAIConnection = async () => {
       detections: [{ class: '测试', confidence: 0.95, bbox: [0, 0, 100, 100] }],
       prompt: '这是一个连接测试，请回复"连接成功"。'
     }
-    const res = await axios.post('/api/interpret', testData)
+    // 该接口现在会先做一次 RAG 检索，默认 30s 不够
+    const res = await axios.post('/api/interpret', testData, { timeout: 180000 })
     if (res.data.success) {
       ElMessage.success(`连接成功！使用提供商: ${res.data.ai_provider || '未知'}`)
     } else {

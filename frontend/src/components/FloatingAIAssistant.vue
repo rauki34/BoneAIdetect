@@ -378,9 +378,15 @@ const sendMessage = async () => {
   nextTick(() => scrollToBottom())
   
   try {
+    // 必须显式放宽超时：axios 实例默认 30s，而接入 RAG 后
+    // 一次回答实测需 30-45s（检索约 2s + 模型生成 30-45s），
+    // 用默认值会在服务端已经成功返回 200 的情况下由浏览器先中断，
+    // 用户看到的是"服务暂时不可用"，日志里却是一条成功的请求。
     const response = await axios.post('/api/ai-assistant/chat', {
       session_id: sessionId.value,
       message: message
+    }, {
+      timeout: 180000
     })
     
     if (response.data.success) {
