@@ -149,6 +149,28 @@ def main():
         else:
             print(f'  [{role}] 登录失败: {err}')
 
+    # ---------- 0. 基础端点 ----------
+    # 放在这里而不是单开脚本：这个脚本每阶段都会跑。
+    # 起因是阶段 4 的收尾提交把 app.py 里的 `from core.paths import ...`
+    # 收窄成只剩 MODEL_CANDIDATES，而 /results、/uploads 两个静态路由仍在用
+    # 裸的 RESULTS/UPLOADS —— 图片从此全部 500，却跨过两个阶段无人发现，
+    # 因为没有任何测试真正**取过一张图**（冒烟只验证接口返回了图片路径）。
+    section('[0] 基础端点（静态资源）')
+    import os
+    backend_dir = pathlib.Path(__file__).resolve().parent.parent
+    assets = [('/results', backend_dir / 'results'),
+              ('/uploads', backend_dir / 'uploads')]
+    for prefix, directory in assets:
+        names = sorted(os.listdir(directory)) if directory.exists() else []
+        if not names:
+            skip(f'{prefix}/<file> 可取', '目录下没有文件可供测试')
+            continue
+        r = requests.get(f'{BASE}{prefix}/{names[0]}', timeout=15)
+        ok = r.status_code == 200 and 'image' in r.headers.get('Content-Type', '')
+        check(f'{prefix}/<file> 返回图片', ok,
+              f'HTTP {r.status_code} {r.headers.get("Content-Type", "")} '
+              f'{len(r.content)} 字节')
+
     # ---------- 1. 权限门禁 ----------
     section('[1] 知识库接口权限门禁')
     r = requests.get(f'{BASE}/api/knowledge/docs', timeout=15)

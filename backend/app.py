@@ -44,7 +44,11 @@ jwt = JWTManager(app)           # JWT 认证（密钥与有效期来自 config.p
 
 # ==================== 导入共享模块 ====================
 # 各业务域的实现已拆至 core/（通用能力）、services/（服务层）、api/（路由蓝图）
-from core.paths import MODEL_CANDIDATES  # noqa: E402,F401
+# RESULTS / UPLOADS 供下方 /results、/uploads 两个静态路由使用。
+# 阶段 4 的收尾提交把这里的导入收窄成只剩 MODEL_CANDIDATES，静态路由随即
+# 因 NameError 全部 500 —— 图片从此取不出来，且连续两个阶段无人察觉
+# （没有测试真正取过图，冒烟只验证了接口返回了图片路径）。
+from core.paths import MODEL_CANDIDATES, RESULTS, UPLOADS  # noqa: E402,F401
 from core.state import (  # noqa: E402,F401
     RATE_LIMIT_CONFIG, init_models,
     load_models, models, rate_limit_lock, rate_limit_storage,
