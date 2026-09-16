@@ -98,6 +98,25 @@ frontmatter 的 `source` 字段标明依据来源。
 - 与共享语料在**同一张表**，但共享行 `patient_id IS NULL`
 - 前端的引用卡片上标注「本人病历」
 
+### 只收临床事实，不收既往的 AI 解读
+
+病历切片**刻意排除** `medical_advice.interpretation` 等 AI 生成的文本，
+只保留：检查日期、检出类型与置信度、医生填写的诊断结论与随访备注
+（见 `services/rag/pipeline.py::_detection_report_text`）。
+
+原因是一个会自我强化的回路：
+
+```
+AI 解读 → 存进病历 → 切片入库 → 被检索为参考资料 → 下一代解读再引用它
+```
+
+两个后果：引用卡片标着「本人病历」而内容其实是 AI 写的，
+患者会误以为是医生结论；以及上一轮的错误被当成"事实"逐轮放大。
+
+解读文本在界面上照常看得到，只是不再充当知识源。
+（对照：共享语料里的 `origin: curated` 整理稿也是本项目整理的，
+但它们在界面上明确标为「整理摘要」，与「本人病历」区分。）
+
 入库命令：`python scripts/ingest_knowledge.py --apply --patient-records`
 
 ## 扫描件政策

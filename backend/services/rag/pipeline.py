@@ -392,9 +392,18 @@ class RAGPipeline:
 
 
 def _detection_report_text(report):
-    """把一份检测报告渲染成可检索的文本"""
+    """把一份检测报告渲染成可检索的文本
+
+    **只收临床事实，不收既往的 AI 解读**（`medical_advice.interpretation` 等）。
+
+    原因：把 AI 生成的分析文本也当作"病历"入库，会形成
+        AI 解读 → 存进病历 → 切片入库 → 被检索为参考资料 → 下一代解读再引用它
+    的回路。后果有两个：一是引用卡片标着「本人病历」，
+    内容却是 AI 写的，患者会误以为是医生结论；二是上一轮的错误会被
+    当成"事实"逐轮强化。
+    解读文本在界面上照常看得到，只是不再充当知识源。
+    """
     detections = safe_json_loads(report.detections, []) or []
-    advice = safe_json_loads(report.medical_advice, {}) or {}
 
     lines = [
         f'检查日期：{report.timestamp.strftime("%Y-%m-%d") if report.timestamp else "未知"}',
@@ -413,11 +422,6 @@ def _detection_report_text(report):
         lines.append(f'诊断结论：{report.diagnosis}')
     if report.follow_up_notes:
         lines.append(f'随访备注：{report.follow_up_notes}')
-    if isinstance(advice, dict):
-        for key, label in (('interpretation', '解读'), ('diagnosis', '诊断'),
-                           ('treatment', '治疗建议'), ('precautions', '注意事项')):
-            if advice.get(key):
-                lines.append(f'{label}：{advice[key]}')
     return '\n'.join(lines)
 
 
