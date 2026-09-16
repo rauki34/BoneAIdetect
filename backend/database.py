@@ -74,6 +74,19 @@ class VectorType(db.TypeDecorator):
             return dialect.type_descriptor(_PGVector(EMBEDDING_DIM))
         return dialect.type_descriptor(db.Text())
 
+    @property
+    def comparator_factory(self):
+        """把 pgvector 的 `<=>` 比较器暴露到表达式层
+
+        只重写 load_dialect_impl 是不够的：那只影响**建表时的 DDL**，
+        ORM 表达式走的是 TypeDecorator 自己的 comparator（默认取自 impl，
+        也就是 TEXT）。不接上这一层，`KnowledgeChunk.embedding.cosine_distance(...)`
+        会直接 AttributeError。
+        """
+        if _PGVector is None:
+            return super().comparator_factory
+        return _PGVector.Comparator
+
     def process_bind_param(self, value, dialect):
         if value is None:
             return None

@@ -22,16 +22,9 @@ _HEADING_RE = re.compile(r'^(#{1,6})\s+(.*)$')
 _SENTENCE_SPLIT_RE = re.compile(r'(?<=[。！？；\n])|(?<=[.!?])\s+')
 
 
-def count_tokens(text):
-    """估算 token 数
-
-    刻意不引入 tokenizer：切片器要保持纯函数、可单测，也不该为了数数
-    付出十秒的模型加载。bge-m3 用的是 XLM-R sentencepiece，中文约 1 字
-    1 token、英文约 1.3 词 1 token，按此估算足够支撑阈值判断。
-    """
-    cjk = sum(1 for ch in text if '一' <= ch <= '鿿')
-    words = len(re.findall(r'[A-Za-z0-9]+', text))
-    return cjk + int(words * 1.3)
+# token 计数移至 services/rag/tokens.py：用真实分词器，估算公式对英文医学术语
+# 会低估近 2 倍，按估算值判断切片不超窗口、实际嵌入时却被静默截断。
+from services.rag.tokens import count_tokens  # noqa: E402  (保持本模块既有导入位置)
 
 
 @dataclass
@@ -115,7 +108,10 @@ class MedicalSplitter:
     CHUNK_SIZE = 512
     OVERLAP = 64
     MIN_CHUNK_TOKENS = 60      # 只有标题没有正文的块并入下一块
-    MAX_CHUNK_TOKENS = 900     # 硬上限，表格除外
+    # 正文的硬上限。之所以不是 900：缓冲检查只统计正文，而成品切片还要
+    # 加上重叠回带（≤64）与 `标题 · 章节` 头部，三者相加仍需留出余量
+    # 才能稳稳落在嵌入窗口（1024）之内。820 对应成品约 900 token。
+    MAX_CHUNK_TOKENS = 820
 
     def split(self, doc):
         blocks = self._explode_oversized(_tokenize_blocks(doc.text))
@@ -154,7 +150,12 @@ class MedicalSplitter:
                 page=buf_page,
                 token_count=count_tokens(content),
             ))
-            pending = self._tail_sentences(body, self.OVERLAP)
+            # 只对散文做重叠回带。表格/代码块的回带没有意义：
+            # 按句切分会在表格行内部乱切，结果是行被重复计入两个切片，
+            # 且拼出的片段不是合法表格。表格靠重复表头保持自解释，不需要重叠。
+            last_kind = buf[-1][0] if buf else 'para'
+            pending = ('' if last_kind in ('table', 'code')
+                       else self._tail_sentences(body, self.OVERLAP))
             pending_section = buf_section
             buf, buf_tokens = [], 0
 
@@ -245,23 +246,64 @@ class MedicalSplitter:
         return result
 
     def _explode_oversized(self, blocks):
-        """把超长段落块按句拆成多个块
+        """把超长块拆成多个块
 
-        必需的一步：块间切分管不到"单个段落本身就超限"的情况，而医学文档里
-        整段不分行的写法很常见。若放任其成为超长切片，嵌入时会被 bge-m3 的
-        max_seq_length 悄悄截断——那部分内容进得了库、却永远检索不到，
+        必需的一步：块间切分管不到"单个块本身就超限"的情况，而医学文档里
+        整段不分行、以及大表格都很常见。若放任其成为超长切片，嵌入时会被
+        模型的 max_seq_length 悄悄截断——那部分内容进得了库、却永远检索不到，
         表面上看不出任何异常。
 
-        表格与代码块不拆：半张分型表比没有表更危险，这个取舍是有意的。
+        - 段落 / 代码块按句拆
+        - **表格按行拆，且每片重复表头**
+
+        表格本应"原子不切"（半张分型表比没有表更危险）。但模型窗口是硬约束：
+        一张 4000 字的表无论切不切都嵌不进去，区别只在于"切了，每片仍是
+        带表头的完整表格"还是"没切，但后半张被静默丢弃"。前者显然更可取，
+        因此这里的取舍是：**宁可重复表头，也不让表格后半截消失**。
         """
         result = []
         for block in blocks:
-            if block[0] != 'para' or count_tokens(block[1]) <= self.CHUNK_SIZE:
+            kind = block[0]
+            # 只有 para / table 的 block[1] 是文本；heading 是 (kind, level, title)
+            if kind not in ('para', 'table'):
                 result.append(block)
                 continue
-            for piece in self._pack_sentences(block[1], self.CHUNK_SIZE):
-                result.append(('para', piece))
+            text = block[1]
+            if count_tokens(text) <= self.CHUNK_SIZE:
+                result.append(block)
+                continue
+            if kind == 'para':
+                for piece in self._pack_sentences(text, self.CHUNK_SIZE):
+                    result.append(('para', piece))
+            else:
+                for piece in self._split_table(text):
+                    result.append(('table', piece))
         return result
+
+    def _split_table(self, table_md):
+        """按行拆分大表格，每片带上原表头与分隔行
+
+        重复表头让每一片都是**自解释的完整表格**，脱离上下文也能读懂列含义；
+        否则第二片起就是一堆无头数据，检索到了也没有意义。
+        """
+        lines = table_md.split('\n')
+        if len(lines) <= 3:
+            return [table_md]
+        header, body = lines[:2], lines[2:]
+        header_tokens = count_tokens('\n'.join(header))
+        budget = max(self.CHUNK_SIZE - header_tokens, 50)
+
+        parts, buf, total = [], [], 0
+        for row in body:
+            tokens = count_tokens(row)
+            if buf and total + tokens > budget:
+                parts.append('\n'.join(header + buf))
+                buf, total = [], 0
+            buf.append(row)
+            total += tokens
+        if buf:
+            parts.append('\n'.join(header + buf))
+        return parts or [table_md]
 
     @staticmethod
     def _pack_sentences(text, target):
@@ -301,6 +343,12 @@ class MedicalSplitter:
         """从尾部按句取够 target_tokens，作为下一块的重叠
 
         按句而不是按字符回带：半句话进入下一块会污染检索到的语义。
+
+        **单句必须设上限**：医学文献（尤其从 XML 转来的）经常整段只有一个
+        句号，按"取到够 64 token 为止"的写法会把整整 500+ token 带进下一块，
+        下一块随即超过模型窗口被静默截断。实测一份 PMC 文献因此产生了
+        1030/1041 token 的切片——远超 1024 的嵌入窗口。单句超过目标时
+        只取该句尾部。
         """
         if target_tokens <= 0:
             return ''
@@ -308,8 +356,14 @@ class MedicalSplitter:
         picked = []
         total = 0
         for sentence in reversed(sentences):
-            total += count_tokens(sentence)
+            tokens = count_tokens(sentence)
+            if tokens >= target_tokens:
+                # 按比例截取尾部，使实际回带量真正落在目标附近
+                keep = max(20, int(len(sentence) * target_tokens / max(tokens, 1)))
+                picked.append(sentence[-keep:])
+                break
             picked.append(sentence)
+            total += tokens
             if total >= target_tokens:
                 break
         return ''.join(reversed(picked)).strip()

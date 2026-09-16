@@ -347,6 +347,9 @@ class RAGPipeline:
                     file_hash=_text_hash(f'medical_record:{record.id}:'
                                          f'{record.updated_at}'),
                     doc_type='record', patient_id=user.id,
+                    # 出处不能留空：引用卡片会显示一个空来源。
+                    # 患者病历的出处就是本院病历系统本身。
+                    source='本院电子病历系统（患者本人记录）',
                     apply=apply, replace=replace, batch_size=batch_size,
                     doc_meta_extra={'source_table': 'medical_records',
                                     'source_id': record.id},
@@ -362,6 +365,7 @@ class RAGPipeline:
                     file_hash=_text_hash(f'detection_history:{report.id}:'
                                          f'{report.timestamp}'),
                     doc_type='record', patient_id=user.id,
+                    source='本院骨折检测报告（患者本人记录）',
                     apply=apply, replace=replace, batch_size=batch_size,
                     doc_meta_extra={'source_table': 'detection_history',
                                     'source_id': report.id},
