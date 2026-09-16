@@ -99,7 +99,7 @@ class RAGPipeline:
             # 扫描件等解析失败：留下 failed 记录，让使用者看到原因
             return self._record_failure(
                 str(path), title or path.stem, str(e), patient_id, uploaded_by,
-                apply, path=path)
+                apply, path_obj=path)
 
         raw = path.read_bytes()
         file_hash = hashlib.sha256(raw).hexdigest()

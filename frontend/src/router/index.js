@@ -9,6 +9,7 @@ const AdminApproval = () => import("../views/AdminApproval.vue")
 const Detection = () => import("../views/Detection.vue")
 const VideoStreamDetection = () => import("../views/VideoStreamDetection.vue")
 const CameraDetection = () => import("../views/CameraDetection.vue")
+const KnowledgeBase = () => import("../views/KnowledgeBase.vue")
 
 // 修复 Edge 最小化自动弹回
 const originalReplaceState = history.replaceState;
@@ -65,6 +66,13 @@ const router = createRouter({
     {
       path: "/camera",
       component: CameraDetection,
+      meta: { requiresAuth: true, allowedRoles: ["admin", "doctor"] }
+    },
+
+    // 知识库管理 - 仅医生和admin可访问
+    {
+      path: "/knowledge",
+      component: KnowledgeBase,
       meta: { requiresAuth: true, allowedRoles: ["admin", "doctor"] }
     }
   ]

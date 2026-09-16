@@ -255,6 +255,10 @@
         <div class="markdown-body">
           <vue-markdown :source="interpretResult" />
         </div>
+        <CitationList
+          v-if="interpretReferences.length"
+          :references="interpretReferences"
+        />
       </div>
       <template #footer>
         <el-button @click="resultDialogVisible = false">关闭</el-button>
@@ -274,6 +278,7 @@ import { ArrowLeft } from '@element-plus/icons-vue'
 import VueMarkdown from 'vue-markdown-render'
 import 'github-markdown-css/github-markdown-light.css'
 import PatientSelector from '../components/PatientSelector.vue'
+import CitationList from '../components/CitationList.vue'
 
 const router = useRouter()
 
@@ -311,6 +316,7 @@ const interpretDialogVisible = ref(false)
 const resultDialogVisible = ref(false)
 const interpretLoading = ref(false)
 const interpretResult = ref('')
+const interpretReferences = ref([])   // RAG 引用溯源结果
 const patientInfo = ref({
   age: '',
   gender: '',
@@ -523,14 +529,18 @@ async function submitInterpret() {
 
     if (res.data.success) {
       interpretResult.value = res.data.interpretation
+      // 引用溯源结果：正文里的 [1][2] 对应这些来源
+      interpretReferences.value = res.data.references || []
       resultDialogVisible.value = true
       interpretDialogVisible.value = false
-      
-      // 保存医疗建议到历史记录
+
+      // 保存医疗建议到历史记录（references 必须一起存，
+      // 否则正文留着 [n] 角标却再也找不到对应来源）
       if (currentHistoryId.value) {
         try {
           await axios.post(`/api/history/${currentHistoryId.value}/advice`, {
             interpretation: res.data.interpretation,
+            references: interpretReferences.value,
             patient_info: patientInfo.value,
             prompt: customPrompt.value
           })

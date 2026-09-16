@@ -9,9 +9,10 @@ from sqlalchemy import func
 
 from core.auth import get_current_user, require_auth, require_role
 from core.ratelimit import limit
-from database import db, AIConversation
+from database import db, AIConversation, safe_json_loads
 from services.ai_service import (
-    _build_assistant_messages, call_ai_assistant_api, get_llm_client,
+    _build_assistant_messages, build_rag_context, call_ai_assistant_api,
+    get_llm_client,
 )
 from services.llm_client import LLMError
 from utils.logger import logger
@@ -55,14 +56,22 @@ def ai_assistant_chat_stream():
     ))
     db.session.commit()
 
-    messages = _build_assistant_messages(user_id, session_id)
+    # RAG 检索必须在视图内完成：生成器在请求上下文之外执行
+    rag_context, references = build_rag_context(
+        message, patient_id=user_id, include_personal=True,
+    )
+    messages = _build_assistant_messages(
+        user_id, session_id, rag_context=rag_context, question=message,
+    )
 
     # 必须在视图内构造客户端：生成器在请求上下文之外执行，
     # 此时 get_llm_client() 内部的数据库查询会抛
     # "Working outside of application context"
     client = get_llm_client()
-    # 超时口径与非流式接口一致：本地模型慢，用 Provider 默认值
-    timeout = None if client.provider_name == 'local' else 60
+    # 超时用 Provider 默认值（modelscope 120s）。此前对远端固定 60s，
+    # 注入参考资料后实测单次回答需 38-45s，余量过小，
+    # 稍有波动就会超时并静默降级为预设话术。
+    timeout = None
 
     def generate():
         collected = []
@@ -88,10 +97,16 @@ def ai_assistant_chat_stream():
                             session_id=session_id,
                             message_type='assistant',
                             message_content=''.join(collected),
+                            references=(json.dumps(references, ensure_ascii=False)
+                                        if references else None),
                         ))
                         db.session.commit()
                 except Exception as e:
                     logger.error('保存流式回复失败: %s', e, exc_info=True)
+            # 引用先于 [DONE] 送出。前端目前未使用本流式接口，
+            # 这里只为契约完整（前端若改用 SSE，引用已经就位）。
+            if references:
+                yield f'data: {json.dumps({"references": references}, ensure_ascii=False)}\n\n'
             yield 'data: [DONE]\n\n'
 
     return Response(
@@ -131,28 +146,38 @@ def ai_assistant_chat():
         db.session.add(user_msg)
         db.session.commit()
         
-        # 构建消息历史（系统提示词 + 最近 10 条上下文）
-        messages = _build_assistant_messages(user.id, session_id)
+        # RAG：检索共享知识库 + 该患者本人病历。
+        # 检索失败返回 ('', [])，对话退回无参考资料的回答，不会因此不可用。
+        rag_context, references = build_rag_context(
+            message, patient_id=user.id, include_personal=True,
+        )
+
+        # 构建消息历史（系统提示词 + RAG 参考资料 + 最近 10 条上下文）
+        messages = _build_assistant_messages(
+            user.id, session_id, rag_context=rag_context, question=message,
+        )
 
         # 使用系统配置的AI服务
         reply = call_ai_assistant_api(messages)
-        
-        # 保存AI回复到数据库
+
+        # 保存AI回复到数据库（引用一并落库，刷新页面后引用卡片才不丢）
         ai_msg = AIConversation(
             patient_id=user.id,
             session_id=session_id,
             message_type='assistant',
-            message_content=reply
+            message_content=reply,
+            references=json.dumps(references, ensure_ascii=False) if references else None,
         )
         db.session.add(ai_msg)
         db.session.commit()
-        
+
         return jsonify({
             "success": True,
             "reply": reply,
+            "references": references,
             "session_id": session_id
         })
-        
+
     except Exception as e:
         db.session.rollback()
         logger.error(f"AI助手对话失败: {e}")
@@ -181,6 +206,8 @@ def ai_assistant_history():
             messages.append({
                 "role": conv.message_type,
                 "content": conv.message_content,
+                # 引用随消息一并返回，否则刷新页面后引用卡片就没了
+                "references": safe_json_loads(conv.references, []),
                 "timestamp": conv.created_at.isoformat() if conv.created_at else None
             })
         

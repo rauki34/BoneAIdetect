@@ -2,6 +2,7 @@
 # utils.logger 在**导入时**就会读取 LOG_LEVEL，若此时 .env 尚未加载，
 # 其中的配置会被静默忽略。
 import os
+import threading
 
 try:
     from dotenv import load_dotenv
@@ -82,6 +83,22 @@ with app.app_context():
 
 init_models()   # 加载预置 YOLO 模型
 
+# RAG 模型预热（默认关闭）。首次检索要等模型加载 10-30 秒，
+# 预热把这段等待挪到启动阶段；默认关闭是为了不让启动时间变长，
+# 需要时置 RAG_WARMUP=true。
+if app.config.get('RAG_WARMUP'):
+    def _warmup_rag():
+        try:
+            from services.rag.embedder import Embedder
+            from services.rag.reranker import Reranker
+            Embedder.instance().available
+            Reranker.instance().available
+            logger.info('✅ RAG 模型预热完成')
+        except Exception as e:
+            logger.warning('RAG 模型预热失败（不影响其余功能）: %s', e)
+
+    threading.Thread(target=_warmup_rag, daemon=True).start()
+
 # ==================== 蓝图注册 ====================
 # 各业务域路由已拆至 api/ 包；路由保留完整路径（不使用 url_prefix），
 # 因此 URL 与拆分前逐字一致
@@ -91,12 +108,13 @@ from api.analysis import bp as analysis_bp  # noqa: E402
 from api.auth import bp as auth_bp  # noqa: E402
 from api.detection import bp as detection_bp  # noqa: E402
 from api.doctor import bp as doctor_bp  # noqa: E402
+from api.knowledge import bp as knowledge_bp  # noqa: E402
 from api.message import bp as message_bp  # noqa: E402
 from api.patient import bp as patient_bp  # noqa: E402
 from api.training import bp as training_bp  # noqa: E402
 
 for _bp in (admin_bp, ai_bp, analysis_bp, auth_bp, detection_bp,
-            doctor_bp, message_bp, patient_bp, training_bp):
+            doctor_bp, knowledge_bp, message_bp, patient_bp, training_bp):
     app.register_blueprint(_bp)
 
 

@@ -19,12 +19,14 @@ from flask import Blueprint, jsonify, request
 from ultralytics import YOLO
 
 from core.auth import get_current_user, require_auth, require_role
-from core.helpers import get_filtered_reports, log_operation
+from core.helpers import can_access_patient, get_filtered_reports, log_operation
 from core.paths import MODEL_CANDIDATES, RESULTS, UPLOADS
 from core.ratelimit import limit
 from core.state import models, video_tasks
 from database import CustomModel, DetectionHistory, db
-from services.ai_service import get_ai_settings, get_llm_client
+from services.ai_service import (
+    build_rag_context, get_ai_settings, get_llm_client,
+)
 from services.llm_client import (
     LLMConfigError, LLMConnectionError, LLMTimeoutError,
 )
@@ -208,10 +210,14 @@ def save_medical_advice(history_id):
     
     # 如果没有medical_advice字段，但有interpretation字段（原系统格式）
     if medical_advice is None and data.get('interpretation') is not None:
+        # 这里是**白名单**：不在这个字典里的字段会被静默丢弃。
+        # references 必须列进来，否则 RAG 引用溯源在"保存解读结果"这一步
+        # 就断了——正文留着 [1][2] 角标，却再也找不到对应来源。
         medical_advice = {
             'interpretation': data.get('interpretation'),
             'patient_info': data.get('patient_info', {}),
             'prompt': data.get('prompt', ''),
+            'references': data.get('references', []),
             'updated_at': datetime.utcnow().isoformat()
         }
     
@@ -307,6 +313,27 @@ def interpret_detection():
     else:
         prompt = custom_prompt
 
+    # RAG：以检出的骨折类别为线索检索处置规范与分型标准，
+    # 让解读有据可依，而不是全凭模型自由发挥。
+    # 检索失败返回 ('', [])，解读照常进行。
+    user = get_current_user()
+    classes = [str(d.get('class', '')).strip() for d in detections if d.get('class')]
+    requested_patient = data.get('patient_id')
+    include_personal = bool(requested_patient) and can_access_patient(user, requested_patient)
+    if requested_patient and not include_personal:
+        return jsonify({"error": "无权访问该患者的病历"}), 403
+
+    rag_query = (f"{'、'.join(classes)} 骨折 处置 建议 分型" if classes
+                 else '骨折 处置 建议')
+    rag_context, references = build_rag_context(
+        rag_query,
+        patient_id=int(requested_patient) if include_personal else None,
+        include_personal=include_personal,
+    )
+    if rag_context:
+        from services.rag.prompts import RAG_PROMPT
+        prompt = f'{prompt}\n\n{RAG_PROMPT.format(context=rag_context, question=rag_query)}'
+
     try:
         # 获取AI配置并构造统一客户端
         ai_config = get_ai_settings()
@@ -320,11 +347,12 @@ def interpret_detection():
         reply = client.chat_text(prompt, image_base64=image)
 
         # 记录操作日志
-        log_operation(f"AI解读检测结果:检测数={len(detections)},提供商={provider}")
-        
+        log_operation(f"AI解读检测结果:检测数={len(detections)},提供商={provider},引用={len(references)}")
+
         return jsonify({
             "success": True,
             "interpretation": reply,
+            "references": references,
             "detections_count": len(detections),
             "ai_provider": provider
         })

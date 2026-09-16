@@ -6,8 +6,35 @@ import sys
 
 from flask import request
 
-from database import DetectionHistory, OperationLog, UserAIModel, db
+from database import (
+    DetectionHistory, DoctorPatientRelation, OperationLog, UserAIModel, db,
+)
 from utils.logger import logger
+
+
+def can_access_patient(user, patient_id):
+    """当前用户是否有权访问该患者的数据
+
+    admin 旁路；doctor 需存在医患关联；患者本人只能访问自己。
+    凡是接受 patient_id 参数的接口都应经此校验，避免通过猜 id 越权。
+    """
+    if user is None or patient_id is None:
+        return False
+    if user.role == 'admin':
+        return True
+    try:
+        patient_id = int(patient_id)
+    except (TypeError, ValueError):
+        return False
+    if user.role == 'doctor':
+        return DoctorPatientRelation.query.filter_by(
+            doctor_id=user.id, patient_id=patient_id,
+        ).first() is not None
+    if user.role == 'patient':
+        return user.id == patient_id
+    return False
+
+
 
 # ==================== 操作日志接口（借鉴pear-admin-flask）====================
 

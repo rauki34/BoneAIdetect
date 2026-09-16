@@ -87,6 +87,14 @@ RATE_LIMIT_CONFIG = {
         'max_requests': _env_int('RATE_LIMIT_GENERAL', 100),
         'time_window': 60,
     },
+    'kb_upload': {                # 知识库上传：入库会跑 GPU 且同步执行，须从严
+        'max_requests': _env_int('RATE_LIMIT_KB_UPLOAD', 10),
+        'time_window': 300,
+    },
+    'kb_search': {                # 知识库检索预览：比通用接口宽松，供调参用
+        'max_requests': _env_int('RATE_LIMIT_KB_SEARCH', 60),
+        'time_window': 60,
+    },
 }
 
 # ---------- 视频流 ----------

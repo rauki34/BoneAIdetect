@@ -36,6 +36,10 @@
             <el-icon><MagicStick /></el-icon>
             <span>模型训练</span>
           </el-menu-item>
+          <el-menu-item index="knowledge" @click="router.push('/knowledge')">
+            <el-icon><Collection /></el-icon>
+            <span>知识库</span>
+          </el-menu-item>
           <el-menu-item index="analysis">
             <el-icon><TrendCharts /></el-icon>
             <span>数据分析</span>
@@ -790,6 +794,10 @@
                       <p v-if="selectedDetection.medical_advice.treatment"><strong>治疗建议：</strong>{{ selectedDetection.medical_advice.treatment }}</p>
                       <p v-if="selectedDetection.medical_advice.precautions"><strong>注意事项：</strong>{{ selectedDetection.medical_advice.precautions }}</p>
                     </div>
+                    <CitationList
+                      v-if="selectedDetection.medical_advice.references?.length"
+                      :references="selectedDetection.medical_advice.references"
+                    />
                   </div>
                   <div v-else class="markdown-body medical-advice-content">
                     <vue-markdown :source="selectedDetection.medical_advice" />
@@ -1923,6 +1931,7 @@ import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Setting, DocumentChecked, FirstAidKit, User, Camera, Picture, VideoCamera, MagicStick, TrendCharts, DataAnalysis, Document, Monitor, Collection, Search, Calendar, Bell, Plus, Edit, Delete, View, Upload, VideoPlay, Refresh, Folder, UploadFilled, ArrowLeft } from '@element-plus/icons-vue'
 import axios from '../utils/axios'
+import CitationList from '../components/CitationList.vue'
 import * as echarts from 'echarts'
 import Detection from './Detection.vue'
 import VideoStreamDetection from './VideoStreamDetection.vue'

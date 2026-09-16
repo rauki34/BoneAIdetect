@@ -174,14 +174,53 @@ def generate_ai_advice_async(history_id, detections):
     thread.daemon = True
     thread.start()
 
-def _build_assistant_messages(user_id, session_id):
-    """拼装助手对话上下文（系统提示词 + 最近 10 条历史）"""
+def build_rag_context(query, *, patient_id=None, include_personal=False, top_k=None):
+    """检索并返回 (参考资料文本, 引用列表)
+
+    **任何失败都返回 ('', [])，绝不抛出**。知识库是增强能力：
+    它坏了，对话应该退回普通回答，而不是整个不可用。
+    """
+    if not query or not str(query).strip():
+        return '', []
+    try:
+        from services.rag.prompts import build_references, format_context
+        from services.rag.retriever import RetrievalScope, get_retriever
+
+        scope = RetrievalScope(patient_id=patient_id,
+                               include_personal=include_personal)
+        chunks = get_retriever().retrieve_safely(
+            query, scope=scope,
+            top_k=top_k or current_app.config.get('RAG_TOP_K', 5),
+        )
+        if not chunks:
+            return '', []
+        return format_context(chunks), build_references(chunks)
+    except Exception as e:
+        logger.warning('RAG 检索失败，降级为无参考资料回答: %s', e, exc_info=True)
+        return '', []
+
+
+def _build_assistant_messages(user_id, session_id, *, rag_context='', question=''):
+    """拼装助手对话上下文（系统提示词 + 最近 10 条历史）
+
+    rag_context 非空时把 RAG 提示词**追加进同一条 system 消息**，
+    消息列表的形状（1 条 system + 历史）保持不变：
+    LocalProvider 会把消息列表拍平成裸 prompt，OpenAI 兼容协议则原样发送，
+    改 messages[0] 对两条路径都是形状不变的改动。
+    新增一条 system 消息则会改变形状，风险更大而无收益。
+    """
+    system_prompt = AI_SYSTEM_PROMPT
+    if rag_context:
+        from services.rag.prompts import RAG_PROMPT
+        system_prompt = (f'{AI_SYSTEM_PROMPT}\n\n'
+                         f'{RAG_PROMPT.format(context=rag_context, question=question)}')
+
     history = AIConversation.query.filter_by(
         patient_id=user_id,
         session_id=session_id
     ).order_by(AIConversation.created_at.desc()).limit(10).all()
 
-    messages = [{"role": "system", "content": AI_SYSTEM_PROMPT}]
+    messages = [{"role": "system", "content": system_prompt}]
     # 查询是倒序的，需反转回时间正序
     for h in reversed(history):
         role = "user" if h.message_type == "user" else "assistant"

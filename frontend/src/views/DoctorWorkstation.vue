@@ -50,6 +50,10 @@
             <el-icon><Clock /></el-icon>
             <span>检测历史</span>
           </el-menu-item>
+          <el-menu-item index="knowledge" @click="router.push('/knowledge')">
+            <el-icon><Collection /></el-icon>
+            <span>知识库</span>
+          </el-menu-item>
           <el-menu-item index="add-patient">
             <el-icon><Plus /></el-icon>
             <span>添加患者</span>
@@ -736,6 +740,10 @@
               <div v-if="selectedReport.medical_advice.interpretation" class="markdown-body">
                 <vue-markdown :source="selectedReport.medical_advice.interpretation" />
               </div>
+              <CitationList
+                v-if="selectedReport.medical_advice.references?.length"
+                :references="selectedReport.medical_advice.references"
+              />
               <!-- 显示结构化字段 -->
               <p v-if="selectedReport.medical_advice.diagnosis"><strong>AI诊断：</strong>{{ selectedReport.medical_advice.diagnosis }}</p>
               <p v-if="selectedReport.medical_advice.treatment"><strong>治疗建议：</strong>{{ selectedReport.medical_advice.treatment }}</p>
@@ -846,6 +854,10 @@
               <div v-if="selectedHistory.medical_advice.interpretation" class="markdown-body">
                 <vue-markdown :source="selectedHistory.medical_advice.interpretation" />
               </div>
+              <CitationList
+                v-if="selectedHistory.medical_advice.references?.length"
+                :references="selectedHistory.medical_advice.references"
+              />
             </div>
             <p v-else>{{ selectedHistory.medical_advice }}</p>
           </el-card>
@@ -994,10 +1006,11 @@
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { User, UserFilled, FirstAidKit, HomeFilled, Document, Camera, Files, Plus, Search, Bell, View, Edit, Delete, MagicStick, Clock, ChatDotRound, Position, Check } from '@element-plus/icons-vue'
+import { User, UserFilled, FirstAidKit, HomeFilled, Document, Camera, Files, Plus, Search, Bell, View, Edit, Delete, MagicStick, Clock, ChatDotRound, Position, Check, Collection } from '@element-plus/icons-vue'
 import VueMarkdown from 'vue-markdown-render'
 import 'github-markdown-css/github-markdown-light.css'
 import axios from '../utils/axios'
+import CitationList from '../components/CitationList.vue'
 import { formatDate, formatDateTime } from '../utils/datetime'
 import { clearAuth } from '../utils/auth'
 

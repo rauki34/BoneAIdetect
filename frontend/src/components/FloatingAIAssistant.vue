@@ -54,7 +54,7 @@
         </div>
 
         <!-- 消息区域 -->
-        <div v-else ref="messagesContainer" class="messages-container">
+        <div v-else ref="messagesContainer" class="messages-container" @click="onMessageClick">
           <!-- 欢迎消息 -->
           <div v-if="messages.length === 0" class="welcome-section">
             <div class="welcome-card">
@@ -87,6 +87,7 @@
               v-for="(msg, index) in messages"
               :key="msg.timestamp?.getTime?.() || index"
               :class="['message-item', msg.role]"
+              :data-index="index"
             >
               <div class="message-avatar">
                 <div v-if="msg.role === 'user'" class="user-avatar">
@@ -103,6 +104,12 @@
                     <span class="cursor">|</span>
                   </div>
                   <div v-else class="message-text" v-html="formatMessage(msg.content)"></div>
+                  <!-- 引用溯源：回答里的 [1][2] 角标点击后在这里查到原文 -->
+                  <CitationList
+                    v-if="msg.role === 'assistant' && msg.references?.length"
+                    :references="msg.references"
+                    compact
+                  />
                 </div>
                 <div class="message-meta">
                   <span class="message-time">{{ formatTime(msg.timestamp) }}</span>
@@ -170,6 +177,40 @@
         </div>
       </div>
     </transition>
+
+    <!-- 点击回答里的 [1] 角标后展示该条引用的原文片段 -->
+    <el-dialog
+      v-model="citationDialogVisible"
+      :title="activeCitation ? `引用 [${activeCitation.index}]` : '引用'"
+      width="620px"
+      append-to-body
+    >
+      <div v-if="activeCitation" class="citation-detail">
+        <div class="citation-detail-row">
+          <span class="citation-detail-label">来源</span>
+          <span>《{{ activeCitation.doc }}》</span>
+        </div>
+        <div v-if="activeCitation.section" class="citation-detail-row">
+          <span class="citation-detail-label">章节</span>
+          <span>{{ activeCitation.section }}</span>
+        </div>
+        <div v-if="activeCitation.page" class="citation-detail-row">
+          <span class="citation-detail-label">页码</span>
+          <span>第 {{ activeCitation.page }} 页</span>
+        </div>
+        <div class="citation-detail-row">
+          <span class="citation-detail-label">性质</span>
+          <span>{{ activeCitation.origin_label || activeCitation.origin }}</span>
+        </div>
+        <div v-if="activeCitation.source" class="citation-detail-row">
+          <span class="citation-detail-label">出处</span>
+          <span class="citation-detail-source">{{ activeCitation.source }}</span>
+        </div>
+        <div class="citation-detail-snippet">
+          {{ activeCitation.snippet || activeCitation.content }}
+        </div>
+      </div>
+    </el-dialog>
   </div>
 </template>
 
@@ -193,6 +234,7 @@ import {
   ArrowRight
 } from '@element-plus/icons-vue'
 import axios from '../utils/axios'
+import CitationList from './CitationList.vue'
 
 const isOpen = ref(false)
 const isMaximized = ref(false)
@@ -307,6 +349,8 @@ const loadChatHistory = async () => {
       messages.value = response.data.messages.map(msg => ({
         role: msg.role,
         content: msg.content,
+        // 引用随历史一起返回，刷新页面后引用卡片仍在
+        references: msg.references || [],
         timestamp: new Date(msg.timestamp)
       }))
       nextTick(() => scrollToBottom())
@@ -340,10 +384,11 @@ const sendMessage = async () => {
     })
     
     if (response.data.success) {
-      // 添加AI回复
+      // 添加AI回复（含引用溯源）
       messages.value.push({
         role: 'assistant',
         content: response.data.reply,
+        references: response.data.references || [],
         timestamp: new Date()
       })
     } else {
@@ -415,8 +460,34 @@ const formatMessage = (content) => {
   // 处理斜体 *text*
   formatted = formatted.replace(/\*(.+?)\*/g, '<em>$1</em>')
 
+  // 引用角标：把 [1] [2] 渲染成可点击的 <sup>
+  // 放在**最后**一趟：前面的粗体/斜体规则先跑完，不会破坏这里插入的标签。
+  // 此时内容已被 div.textContent 转义，插入的是固定标签，无注入风险。
+  formatted = formatted.replace(
+    /\[(\d{1,2})\]/g,
+    (m, n) => `<sup class="cite-ref" data-cite="${n}">[${n}]</sup>`
+  )
+
   return formatted
 }
+
+// 引用角标点击（事件委托）
+// v-html 插入的内容不会被 Vue 编译，无法逐节点绑定事件，
+// 因此在容器上统一处理，靠 data-index / data-cite 定位。
+const onMessageClick = (event) => {
+  const target = event.target.closest?.('.cite-ref')
+  if (!target) return
+  const item = target.closest('.message-item')
+  const index = Number(item?.dataset.index)
+  const refs = messages.value[index]?.references || []
+  const ref = refs.find(r => Number(r.index) === Number(target.dataset.cite))
+  if (!ref) return
+  activeCitation.value = ref
+  citationDialogVisible.value = true
+}
+
+const citationDialogVisible = ref(false)
+const activeCitation = ref(null)
 
 // 格式化时间
 const formatTime = (date) => {
@@ -927,6 +998,58 @@ defineExpose({
 
 .message-text {
   white-space: pre-wrap;
+}
+
+/* 回答里的引用角标 [1] —— 由 formatMessage 生成，见 onMessageClick */
+.message-text :deep(.cite-ref) {
+  color: #0d9488;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0 1px;
+  border-radius: 3px;
+}
+
+.message-text :deep(.cite-ref:hover) {
+  background: #f0fdfa;
+  text-decoration: underline;
+}
+
+/* 引用详情弹窗 */
+.citation-detail {
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.citation-detail-row {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.citation-detail-label {
+  flex-shrink: 0;
+  width: 44px;
+  color: #909399;
+}
+
+.citation-detail-source {
+  word-break: break-all;
+}
+
+.citation-detail-snippet {
+  margin-top: 12px;
+  padding: 12px;
+  background: #f5f7fa;
+  border-radius: 6px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+html.dark .citation-detail-snippet {
+  background: #262727;
+  color: #e5eaf3;
 }
 
 .message-meta {

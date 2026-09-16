@@ -62,6 +62,31 @@ class Config:
     # ---------- 外部服务 ----------
     AI_SERVICE_URL = _env('AI_SERVICE_URL', 'http://127.0.0.1:8000')
 
+    # ---------- RAG 知识库 ----------
+    # 总开关：显存吃紧或演示时需要把 GPU 让给 YOLO 时置 false，
+    # 对话会退回"无参考资料"的普通回答，其余功能不受影响
+    RAG_ENABLED = _env('RAG_ENABLED', 'true').lower() == 'true'
+    RAG_EMBED_MODEL = _env('RAG_EMBED_MODEL', 'BAAI/bge-m3')
+    RAG_RERANK_MODEL = _env('RAG_RERANK_MODEL', 'BAAI/bge-reranker-v2-m3')
+    RAG_DEVICE = _env('RAG_DEVICE', 'auto')                  # auto | cuda | cpu
+    RAG_FP16 = _env('RAG_FP16', 'true').lower() == 'true'
+    # 6GB 显存与 YOLO 共存时的安全值；YOLO 不占显存时可加大（--batch）
+    RAG_EMBED_BATCH = int(_env('RAG_EMBED_BATCH', 8))
+    RAG_RERANK_BATCH = int(_env('RAG_RERANK_BATCH', 8))
+    RAG_TOP_K = int(_env('RAG_TOP_K', 5))
+    RAG_RECALL_K = int(_env('RAG_RECALL_K', 20))
+    RAG_RRF_K = int(_env('RAG_RRF_K', 60))
+    # 患者本人病历的保障槽位数（避免被共享语料挤掉）
+    RAG_PERSONAL_SLOTS = int(_env('RAG_PERSONAL_SLOTS', 2))
+    RAG_MIN_SCORE = float(_env('RAG_MIN_SCORE', 0.0))
+    # 启动时预热模型。默认关闭，避免拖慢启动；首次检索会慢 10-30 秒
+    RAG_WARMUP = _env('RAG_WARMUP', 'false').lower() == 'true'
+    RAG_CACHE_TTL = int(_env('RAG_CACHE_TTL', 600))
+    RAG_MAX_UPLOAD_MB = int(_env('RAG_MAX_UPLOAD_MB', 50))
+    # 单次上传的入库上限：入库是同步执行的，须留在浏览器/代理超时之内
+    RAG_MAX_UPLOAD_PAGES = int(_env('RAG_MAX_UPLOAD_PAGES', 30))
+    RAG_MAX_UPLOAD_CHUNKS = int(_env('RAG_MAX_UPLOAD_CHUNKS', 200))
+
     # ---------- 限流 ----------
     RATE_LIMIT_AI = int(_env('RATE_LIMIT_AI', 10))            # AI 对话：次/分钟
     RATE_LIMIT_GENERAL = int(_env('RATE_LIMIT_GENERAL', 100))  # 通用：次/分钟

@@ -448,6 +448,11 @@
             <div v-if="selectedReport.medical_advice.interpretation" class="markdown-body medical-advice-content">
               <vue-markdown :source="selectedReport.medical_advice.interpretation" />
             </div>
+            <!-- 引用溯源：正文里的 [1][2] 对应的来源 -->
+            <CitationList
+              v-if="selectedReport.medical_advice.references?.length"
+              :references="selectedReport.medical_advice.references"
+            />
             <!-- 显示结构化字段 -->
             <div v-else>
               <p v-if="selectedReport.medical_advice.diagnosis"><strong>AI诊断：</strong>{{ selectedReport.medical_advice.diagnosis }}</p>
@@ -735,6 +740,7 @@ import {
 import VueMarkdown from 'vue-markdown-render'
 import 'github-markdown-css/github-markdown-light.css'
 import axios from '../utils/axios'
+import CitationList from '../components/CitationList.vue'
 import { formatDate, formatDateTime } from '../utils/datetime'
 import { clearAuth } from '../utils/auth'
 import FloatingAIAssistant from '../components/FloatingAIAssistant.vue'
@@ -912,10 +918,43 @@ const renderMarkdownToHtml = (markdown) => {
     return `<pre style="background: #f4f4f4; padding: 10px; border-radius: 4px; overflow-x: auto; margin: 10px 0;"><code>${code}</code></pre>`
   })
 
+  // 引用角标 [1] [2]：与页面上保持一致，打印出来也要看得出这是引用
+  // 放在**换行之前**，否则 <br> 会插进标签中间把标记拆开
+  html = html.replace(
+    /\[(\d{1,2})\]/g,
+    (m, n) => `<sup style="color:#0d9488;font-weight:600;">[${n}]</sup>`
+  )
+
   // 处理换行
   html = html.replace(/\n/g, '<br>')
 
   return html
+}
+
+// 打印/导出 HTML 的转义
+// 导出的正文里会插入文档派生的文本（如引用来源标题），
+// 不转义就是把上传内容直接喂进打印窗口
+const escapeHtml = (value) => String(value ?? '')
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;')
+  .replace(/'/g, '&#39;')
+
+// 打印版的参考资料小节
+const renderReferencesHtml = (references) => {
+  if (!Array.isArray(references) || !references.length) return ''
+  const items = references.map(ref => `
+    <li style="margin-bottom: 8px;">
+      《${escapeHtml(ref.doc)}》${escapeHtml(ref.section || '')}${ref.page ? ' 第 ' + escapeHtml(ref.page) + ' 页' : ''}
+      <span style="color:#0d9488;font-size:12px;">（${escapeHtml(ref.origin_label || ref.origin || '来源')}）</span>
+      <div style="color:#475569;font-size:12px;margin-top:4px;white-space:pre-wrap;">${escapeHtml(ref.snippet || '')}</div>
+    </li>`).join('')
+  return `
+    <div class="section">
+      <div class="section-title">参考资料</div>
+      <ol style="padding-left: 20px;">${items}</ol>
+    </div>`
 }
 
 const calculateAge = (birthDate) => {
@@ -1541,6 +1580,9 @@ const exportReport = async (report) => {
         <div class="advice-box markdown-content">${renderMarkdownToHtml(report.medical_advice.interpretation)}</div>
       </div>
       ` : ''}
+
+      ${report.medical_advice?.references?.length
+        ? renderReferencesHtml(report.medical_advice.references) : ''}
 
       <div class="footer">
         <p>本报告由智慧骨科云平台自动生成</p>
