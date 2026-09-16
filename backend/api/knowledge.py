@@ -11,6 +11,7 @@ import json
 import os
 import uuid
 from datetime import datetime
+from pathlib import Path
 
 from flask import Blueprint, jsonify, request
 
@@ -147,27 +148,41 @@ def upload_doc():
     if not raw:
         return jsonify({"success": False, "error": "文件内容为空"}), 400
 
+    origin = (request.form.get('origin') or 'curated').strip()
+    source = (request.form.get('source') or '').strip()
+    # 「公开原文」必须能指出出处：标着"这是公开资料原文"却给不出来源，
+    # 等于让系统替一份无法核实的材料背书。宁可让上传者补一行出处。
+    if origin == 'public' and not source:
+        return jsonify({
+            "success": False,
+            "error": "标注为「公开原文」时必须填写出处（文献引用或链接），"
+                     "否则请改选「整理摘要」",
+        }), 400
+
     patient_id = request.form.get('patient_id')
     if patient_id:
         if not can_access_patient(user, patient_id):
             return jsonify({"success": False, "error": "无权为该患者上传资料"}), 403
         patient_id = int(patient_id)
 
-    path = os.path.join(_upload_dir(), _storage_name(file.filename))
+    original_name = file.filename
+    path = os.path.join(_upload_dir(), _storage_name(original_name))
     with open(path, 'wb') as fh:
         fh.write(raw)
 
     from services.rag.pipeline import RAGPipeline
     result = RAGPipeline().ingest_file(
         path,
-        title=request.form.get('title') or None,
+        # 标题留空时回退到**客户端原名**，而不是落盘的 uuid 名
+        title=request.form.get('title') or Path(original_name).stem,
         doc_type=request.form.get('doc_type') or None,
         department=request.form.get('department') or None,
-        source=request.form.get('source') or None,
-        origin=request.form.get('origin') or None,
+        source=source or None,
+        origin=origin,
         patient_id=patient_id,
         uploaded_by=user.id,
         apply=True,
+        original_filename=original_name,
     )
 
     if result.status == 'failed':

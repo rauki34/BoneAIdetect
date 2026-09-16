@@ -35,6 +35,7 @@ WITH_LLM = '--with-llm' in sys.argv
 PASSWORD = '123456'
 
 PASS, FAIL, SKIP = [], [], []
+TOKENS = {}          # 各角色登录后的 token，供 need() 判断
 
 
 def check(name, cond, detail=''):
@@ -101,6 +102,18 @@ def auth(token):
     return {'Authorization': f'Bearer {token}'}
 
 
+def need(role, what):
+    """需要某角色的 token 才能验证的段落
+
+    缺失时**记一条 SKIP**，而不是让整段静默跳过——
+    后者会让"登录失败、什么都没验"的报告看起来和"全部通过"一样绿。
+    """
+    if role in TOKENS:
+        return True
+    skip(what, f'{role} 账号未登录成功，整段无法验证')
+    return False
+
+
 def discover_users():
     """从数据库取各角色真实账号，避免硬编码"""
     from core.bootstrap import build_bare_app
@@ -126,6 +139,7 @@ def make_scanned_pdf():
 
 
 def main():
+    created_doc_id = None
     served = False
     try:
         requests.get(f'{BASE}/api/captcha', timeout=5)
@@ -139,13 +153,12 @@ def main():
     print(f'接口地址: {BASE}')
     print(f'账号: {users}\n')
 
-    tokens = {}
     for role in ('admin', 'doctor', 'patient'):
         if role not in users:
             continue
         token, err = login(users[role])
         if token:
-            tokens[role] = token
+            TOKENS[role] = token
         else:
             print(f'  [{role}] 登录失败: {err}')
 
@@ -176,19 +189,19 @@ def main():
     r = requests.get(f'{BASE}/api/knowledge/docs', timeout=15)
     check('未认证访问文档列表 → 401', r.status_code == 401, f'HTTP {r.status_code}')
 
-    if 'patient' in tokens:
-        r = requests.get(f'{BASE}/api/knowledge/docs', headers=auth(tokens['patient']), timeout=15)
+    if need('patient', '患者访问知识库接口的门禁'):
+        r = requests.get(f'{BASE}/api/knowledge/docs', headers=auth(TOKENS['patient']), timeout=15)
         check('患者访问文档列表 → 403', r.status_code == 403, f'HTTP {r.status_code}')
 
-    if 'doctor' in tokens:
-        r = requests.get(f'{BASE}/api/knowledge/docs', headers=auth(tokens['doctor']), timeout=15)
+    if need('doctor', '医生访问知识库接口'):
+        r = requests.get(f'{BASE}/api/knowledge/docs', headers=auth(TOKENS['doctor']), timeout=15)
         check('医生访问文档列表 → 200', r.status_code == 200, f'HTTP {r.status_code}')
         if r.status_code == 200:
             data = r.json().get('data', [])
             check('文档列表返回共享语料', len(data) > 0, f'{len(data)} 篇')
 
-    if 'admin' in tokens:
-        r = requests.get(f'{BASE}/api/knowledge/stats', headers=auth(tokens['admin']), timeout=15)
+    if need('admin', '管理员访问知识库统计'):
+        r = requests.get(f'{BASE}/api/knowledge/stats', headers=auth(TOKENS['admin']), timeout=15)
         ok = r.status_code == 200
         check('管理员访问知识库统计 → 200', ok, f'HTTP {r.status_code}')
         if ok:
@@ -198,10 +211,10 @@ def main():
 
     # ---------- 2. 上传：扫描件诚实失败 ----------
     section('[2] 上传（扫描件应被明确拒绝，而非静默空入库）')
-    if 'doctor' in tokens:
+    if need('doctor', '上传相关校验'):
         r = requests.post(
             f'{BASE}/api/knowledge/docs',
-            headers=auth(tokens['doctor']),
+            headers=auth(TOKENS['doctor']),
             files={'file': ('扫描件.pdf', make_scanned_pdf(), 'application/pdf')},
             data={'title': '契约验证-扫描件'},
             timeout=120,
@@ -212,16 +225,49 @@ def main():
 
         r = requests.post(
             f'{BASE}/api/knowledge/docs',
-            headers=auth(tokens['doctor']),
+            headers=auth(TOKENS['doctor']),
             files={'file': ('x.rtf', io.BytesIO(b'hello'), 'text/rtf')},
             timeout=60,
         )
         check('上传不支持的类型 → 415', r.status_code == 415, f'HTTP {r.status_code}')
 
+        # 标着「公开原文」却给不出来源 = 让系统替无法核实的材料背书。
+        # 判据：出处是引用溯源的立身之本，公开原文必须能指出来源。
+        r = requests.post(
+            f'{BASE}/api/knowledge/docs',
+            headers=auth(TOKENS['doctor']),
+            files={'file': ('测试.md', io.BytesIO('# 测试\n\n正文内容。'.encode('utf-8')), 'text/markdown')},
+            data={'origin': 'public', 'source': ''},
+            timeout=60,
+        )
+        check('「公开原文」未填出处 → 400', r.status_code == 400, f'HTTP {r.status_code}')
+        if r.status_code == 400:
+            print(f"      错误文案: {r.json().get('error', '')[:60]}")
+
+        # 整理摘要不要求出处，但标题应回退到原始文件名而不是落盘 uuid
+        r = requests.post(
+            f'{BASE}/api/knowledge/docs',
+            headers=auth(TOKENS['doctor']),
+            files={'file': ('契约验证-标题回退.md',
+                            io.BytesIO('# 标题回退验证\n\n## 一、小节\n\n正文内容。'.encode('utf-8')),
+                            'text/markdown')},
+            data={'origin': 'curated', 'source': '契约验证自动生成'},
+            timeout=120,
+        )
+        if r.status_code == 200:
+            title = r.json().get('title', '')
+            check('标题回退到原始文件名（而非落盘 uuid）',
+                  '契约验证-标题回退' in title, f'标题 = {title!r}')
+            created_doc_id = r.json().get('doc_id')
+        else:
+            check('标题回退到原始文件名（而非落盘 uuid）', False,
+                  f'HTTP {r.status_code} {r.text[:100]}')
+            created_doc_id = None
+
     # ---------- 3. 检索预览 ----------
     section('[3] 检索预览（混合检索可观察性）')
-    if 'doctor' in tokens:
-        r = requests.post(f'{BASE}/api/knowledge/search', headers=auth(tokens['doctor']),
+    if need('doctor', '检索预览'):
+        r = requests.post(f'{BASE}/api/knowledge/search', headers=auth(TOKENS['doctor']),
                           json={'query': '股骨远端骨折的AO分型标准', 'top_k': 3}, timeout=180)
         ok = r.status_code == 200
         check('检索接口 → 200', ok, f'HTTP {r.status_code}')
@@ -238,21 +284,20 @@ def main():
                       all(k in first for k in
                           ('vec_rank', 'bm25_rank', 'rrf_score', 'origin', 'snippet')))
 
-        r = requests.post(f'{BASE}/api/knowledge/search', headers=auth(tokens['doctor']),
+        r = requests.post(f'{BASE}/api/knowledge/search', headers=auth(TOKENS['doctor']),
                           json={'query': ''}, timeout=30)
         check('空查询 → 400', r.status_code == 400, f'HTTP {r.status_code}')
 
     # ---------- 4. 对话带引用 ----------
     section('[4] 对话接口返回引用')
-    if 'patient' not in tokens:
-        # 必须显式记一条 SKIP：整块静默跳过会让报告看起来"全都通过了"
-        skip('对话返回 references', '患者账号登录失败，无法验证')
+    if not need('patient', '对话返回 references'):
+        pass
     elif not WITH_LLM:
         skip('对话返回 references', '未指定 --with-llm（真实模型调用耗时较长）')
     else:
         if True:
             session_id = f'kb-verify-{int(time.time())}'
-            r = requests.post(f'{BASE}/api/ai-assistant/chat', headers=auth(tokens['patient']),
+            r = requests.post(f'{BASE}/api/ai-assistant/chat', headers=auth(TOKENS['patient']),
                               json={'session_id': session_id,
                                     'message': '股骨远端骨折的AO分型标准是什么'},
                               timeout=300)
@@ -275,7 +320,7 @@ def main():
 
                 # 刷新后引用应仍在（对应 ai_conversations.references 列）
                 r2 = requests.get(f'{BASE}/api/ai-assistant/history',
-                                  headers=auth(tokens['patient']),
+                                  headers=auth(TOKENS['patient']),
                                   params={'session_id': session_id}, timeout=30)
                 if r2.status_code == 200:
                     msgs = r2.json().get('messages', [])
@@ -288,10 +333,10 @@ def main():
     section('[5] 解读引用经保存后不丢失（回归：白名单会静默丢弃字段）')
     # 用 admin 提交：它可修改任意记录，因此不受"医生只能改自己创建的记录"
     # 的限制，用例不会因数据缺失而跳过
-    if 'admin' in tokens:
+    if need('admin', '解读引用经保存后不丢失'):
         refs = [{'index': 1, 'doc': '契约验证文档', 'section': '1 测试', 'page': None,
                  'chunk_id': 1, 'score': 0.9, 'origin': 'curated', 'snippet': '测试片段'}]
-        r = requests.get(f'{BASE}/api/history', headers=auth(tokens['admin']), timeout=30)
+        r = requests.get(f'{BASE}/api/history', headers=auth(TOKENS['admin']), timeout=30)
         items = r.json().get('data', []) if r.status_code == 200 else []
         own = [it for it in items if it.get('filename')]
         if not own:
@@ -299,7 +344,7 @@ def main():
         else:
             history_id = own[0]['id']
             r = requests.post(f'{BASE}/api/history/{history_id}/advice',
-                              headers=auth(tokens['admin']),
+                              headers=auth(TOKENS['admin']),
                               json={'interpretation': '契约验证：正文含引用 [1]',
                                     'references': refs,
                                     'patient_info': {}, 'prompt': 'x'},
@@ -307,7 +352,7 @@ def main():
             check('保存解读结果 → 200', r.status_code == 200, f'HTTP {r.status_code}')
             if r.status_code == 200:
                 r2 = requests.get(f'{BASE}/api/history/{history_id}',
-                                  headers=auth(tokens['admin']), timeout=30)
+                                  headers=auth(TOKENS['admin']), timeout=30)
                 if r2.status_code == 200:
                     advice = r2.json().get('medical_advice') or {}
                     if isinstance(advice, str):
@@ -321,7 +366,7 @@ def main():
 
     # ---------- 6. 跨患者越权 ----------
     section('[6] 跨患者越权')
-    if 'doctor' in tokens:
+    if need('doctor', '跨患者越权（医生侧）'):
         # 找一个该医生无权访问的患者 id：取一个不存在关联的
         from core.bootstrap import build_bare_app
         build_bare_app()
@@ -335,21 +380,30 @@ def main():
             skip('医生访问未关联患者的资料 → 403', '找不到未关联的患者')
         else:
             r = requests.get(f'{BASE}/api/knowledge/docs',
-                             headers=auth(tokens['doctor']),
+                             headers=auth(TOKENS['doctor']),
                              params={'patient_id': target.id}, timeout=30)
             check('医生访问未关联患者的资料 → 403', r.status_code == 403,
                   f'HTTP {r.status_code}（患者 id={target.id}）')
             r = requests.post(f'{BASE}/api/knowledge/search',
-                              headers=auth(tokens['doctor']),
+                              headers=auth(TOKENS['doctor']),
                               json={'query': 'x', 'patient_id': target.id,
                                     'include_personal': True}, timeout=60)
             check('医生检索未关联患者的病历 → 403', r.status_code == 403,
                   f'HTTP {r.status_code}')
 
-    if 'patient' in tokens:
-        r = requests.post(f'{BASE}/api/knowledge/search', headers=auth(tokens['patient']),
+    if need('patient', '跨患者越权（患者侧）'):
+        r = requests.post(f'{BASE}/api/knowledge/search', headers=auth(TOKENS['patient']),
                           json={'query': 'x'}, timeout=30)
         check('患者访问知识库检索 → 403', r.status_code == 403, f'HTTP {r.status_code}')
+
+    # 清理本次验证产生的文档，避免污染知识库
+    if created_doc_id and 'admin' in TOKENS:
+        try:
+            requests.delete(f'{BASE}/api/knowledge/docs/{created_doc_id}',
+                            headers=auth(TOKENS['admin']), timeout=30)
+            print('\n  （已清理验证过程中创建的文档）')
+        except requests.exceptions.RequestException:
+            pass
 
     print('\n' + '=' * 62)
     print(f'  通过 {len(PASS)} / 失败 {len(FAIL)} / 跳过 {len(SKIP)}')

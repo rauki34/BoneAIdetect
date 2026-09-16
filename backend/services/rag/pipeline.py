@@ -90,11 +90,16 @@ class RAGPipeline:
 
     def ingest_file(self, path, *, doc_type=None, department=None, source=None,
                     origin=None, patient_id=None, uploaded_by=None, title=None,
-                    apply=True, replace=False, batch_size=None):
+                    apply=True, replace=False, batch_size=None,
+                    original_filename=None):
         path = Path(path)
         started = time.time()
         try:
-            loaded = load_document(path)
+            loaded = load_document(
+                path,
+                fallback_title=(Path(original_filename).stem
+                                if original_filename else None),
+            )
         except LoadError as e:
             # 扫描件等解析失败：留下 failed 记录，让使用者看到原因
             return self._record_failure(
@@ -113,7 +118,9 @@ class RAGPipeline:
             patient_id=patient_id, uploaded_by=uploaded_by,
             apply=apply, replace=replace, batch_size=batch_size,
             file_size=len(raw), mime_type=_mime_of(path),
-            original_filename=path.name, started=started,
+            # 记录**客户端原名**而不是落盘名：上传的落盘名是 uuid，
+            # 用它当标题会得到 "b94842c7..." 这种谁也认不出的东西
+            original_filename=original_filename or path.name, started=started,
             doc_meta_extra=_extra_meta(meta),
         )
 

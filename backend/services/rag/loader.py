@@ -137,6 +137,119 @@ def load_text(path):
     return LoadedDoc(text=body.strip(), meta=meta, pages=0)
 
 
+# 句末标点：这些字符结尾说明是真正的句子/段落结束，不是排版折行
+_TERMINAL_CHARS = '。！？；：!?;:…）)」』】》”"．.'
+
+
+def _rejoin_wrapped_lines(text):
+    """合并 PDF 因排版折行产生的换行
+
+    PDF 的每行是按版面宽度硬折的，换行常落在句子中间：
+        「骨质疏松性骨折是中老年最常见的骨骼疾病 ，¶
+          也是骨质疏松症的严重阶段 ，具有发病率高 、致残¶
+          致死率高、医疗花费高的特点 。」
+    若原样保留，切片器会把换行当成句子边界，切出的片段从半句话开始，
+    读起来是断的，重叠回带也跟着错位。
+
+    判据（启发式）：
+    - 上一行的**长度接近本页行宽** → 说明它是被折行的正文行，不是短标题
+    - 且**不以句末标点结尾** → 说明话没说完
+    同时满足则与下一行合并。"排满一行"这条不能省：
+    否则标题、作者、页眉这些短行会被粘成一坨。
+    """
+    lines = [line.rstrip() for line in text.split('\n')]
+    body_lengths = sorted(len(line.strip()) for line in lines if len(line.strip()) >= 8)
+    if len(body_lengths) < 4:
+        return text                      # 行数太少，判断不出行宽
+
+    width = body_lengths[len(body_lengths) // 2]        # 用中位数而非最大值：
+    threshold = max(8, int(width * 0.8))                # 页眉页脚往往比正文长得多
+    max_reasonable = int(width * 1.3)
+
+    merged = []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            merged.append('')
+            continue
+        if (merged and merged[-1]
+                and len(merged[-1]) <= max_reasonable
+                and len(merged[-1]) >= threshold
+                and merged[-1][-1] not in _TERMINAL_CHARS):
+            merged[-1] = merged[-1] + stripped
+        else:
+            merged.append(stripped)
+    return '\n'.join(merged)
+
+
+def _strip_running_headers(pages):
+    """去掉在多数页面上重复出现的行（页眉、页脚、刊名栏）
+
+    医学期刊的 PDF 每页顶部都有相同的刊名与页码，逐页抽取后这些行会混进
+    正文，既占切片额度又污染检索——它们和正文内容毫无关系。
+    判据：在超过半数页面上出现的同一行，几乎不可能是正文。
+    """
+    if len(pages) < 3:
+        return pages
+
+    def signature(line):
+        """去掉数字与分隔符后的"骨架"
+
+        页眉每页只有页码不同（`… ·1·` / `… ·2·`），精确比对匹配不上，
+        必须先归一化。
+        """
+        return re.sub(r'[\d\s·\-—–_.·,]+', '', line)
+
+    from collections import Counter
+    counter = Counter()
+    for page in pages:
+        seen = {signature(line.strip())
+                for line in page.split('\n') if line.strip()}
+        for sig in seen:
+            counter[sig] += 1
+
+    threshold = max(2, len(pages) // 2)
+    repeated = {sig for sig, count in counter.items()
+                if count >= threshold and len(sig) >= 6}
+
+    cleaned = []
+    for page in pages:
+        kept = [line for line in page.split('\n')
+                if line.strip() and signature(line.strip()) not in repeated]
+        cleaned.append('\n'.join(kept))
+    return cleaned
+
+
+# 中文文档的编号标题：`一、定义`、`（二）影像学检查`
+# 只认这两种。`1.` / `2.` 不认——实测某指南里 42 处 `1.` 大多是表格中的
+# "1.诊断 2.治疗"，提升成标题会把检索结构切得乱七八糟。
+_PDF_HEADING_PATTERNS = (
+    (re.compile(r'^[一二三四五六七八九十]+、\s*\S'), 2),
+    (re.compile(r'^[（(][一二三四五六七八九十]+[）)]\s*\S'), 3),
+)
+_PDF_HEADING_MAX_LEN = 34
+
+
+def _promote_headings(text):
+    """把中文编号标题提升为 markdown 标题，让 PDF 也有章节结构
+
+    PDF 没有标题样式可言，全文扁平。切片器是按标题层级切的，
+    没有标题就没有 section——引用卡片上只能显示书名，读者无从定位。
+    识别出编号标题后，PDF 与 markdown 走同一套切片逻辑。
+    """
+    out = []
+    for line in text.split('\n'):
+        stripped = line.strip()
+        level = None
+        if stripped and len(stripped) <= _PDF_HEADING_MAX_LEN and not stripped.endswith('。'):
+            for pattern, candidate in _PDF_HEADING_PATTERNS:
+                if pattern.match(stripped):
+                    level = candidate
+                    break
+        out.append('#' * level + ' ' + stripped if level else line)
+    return '\n'.join(out)
+
+
 def load_pdf(path):
     """解析 PDF，逐页插入分页哨兵
 
@@ -147,14 +260,22 @@ def load_pdf(path):
     try:
         reader = PdfReader(str(path))
         pages = len(reader.pages)
-        parts = []
+        raw_pages = []
         for i, page in enumerate(reader.pages, start=1):
             try:
-                text = page.extract_text() or ''
+                raw_pages.append(page.extract_text() or '')
             except Exception as e:          # 单页解析失败不应毁掉整篇
                 logger.warning('PDF 第 %d 页解析失败: %s', i, e)
-                text = ''
-            parts.append(f'{PAGE_SENTINEL.format(i)}\n{text.strip()}')
+                raw_pages.append('')
+        # 顺序要紧：先去页眉页脚（它们会干扰行宽判断），再合并折行
+        # 顺序要紧：先去页眉页脚（它们会干扰行宽判断），再合并折行，
+        # 最后才认标题（折行合并后标题才可能独占一行）
+        cleaned = _strip_running_headers(raw_pages)
+        parts = [
+            f'{PAGE_SENTINEL.format(i)}\n'
+            f'{_promote_headings(_rejoin_wrapped_lines(text)).strip()}'
+            for i, text in enumerate(cleaned, start=1)
+        ]
     except Exception as e:
         raise LoadError(f'PDF 解析失败: {e}') from e
 
@@ -229,8 +350,12 @@ def _table_to_markdown(table):
     return '\n'.join(rows)
 
 
-def load_document(path):
-    """按扩展名分派解析器"""
+def load_document(path, fallback_title=None):
+    """按扩展名分派解析器
+
+    fallback_title 用于上传场景：落盘名是 uuid，直接拿它当标题
+    会得到一串谁也认不出的字符，应改用客户端原名。
+    """
     path = Path(path)
     if not path.exists():
         raise LoadError(f'文件不存在: {path}')
@@ -250,7 +375,7 @@ def load_document(path):
     }[kind]
 
     doc = loader(path)
-    doc.meta = infer_meta(doc.meta, doc.text, path.stem)
+    doc.meta = infer_meta(doc.meta, doc.text, fallback_title or path.stem)
     return doc
 
 
