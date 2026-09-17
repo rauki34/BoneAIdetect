@@ -745,7 +745,9 @@
               </el-row>
 
               <!-- 基本信息 -->
-              <el-descriptions :column="2" border>
+              <!-- label-width 与下方 CSS 的 table-layout:fixed 配合：
+                   固定布局下 4 列会均分宽度，标签列过宽、内容列过窄 -->
+              <el-descriptions :column="2" border label-width="90px">
                 <el-descriptions-item label="ID">{{ selectedDetection.id }}</el-descriptions-item>
                 <el-descriptions-item label="文件名">{{ selectedDetection.filename }}</el-descriptions-item>
                 <el-descriptions-item label="患者">{{ selectedDetection.patient_name || '-' }}</el-descriptions-item>
@@ -4186,6 +4188,21 @@ const handleDatasetPageChange = (page) => {
 }
 
 /* 医疗建议样式 */
+/* 文件名这类长串没有断词点，浏览器只能把表格列撑宽，内容就会溢出弹窗。
+   table-layout: fixed 让列宽服从容器，overflow-wrap: anywhere 给它断词的机会。
+   两者缺一不可：只设断词，自动布局仍会按内容把列撑开。 */
+.detection-detail :deep(.el-descriptions__table) {
+  table-layout: fixed;
+  width: 100%;
+}
+.detection-detail :deep(.el-descriptions__content) {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.detection-detail :deep(.el-descriptions__label) {
+  white-space: nowrap;
+}
+
 .detection-detail .medical-advice-content {
   padding: 10px;
   font-size: 14px;
