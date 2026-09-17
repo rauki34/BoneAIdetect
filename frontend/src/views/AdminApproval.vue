@@ -750,7 +750,7 @@
                 <el-descriptions-item label="文件名">{{ selectedDetection.filename }}</el-descriptions-item>
                 <el-descriptions-item label="患者">{{ selectedDetection.patient_name || '-' }}</el-descriptions-item>
                 <el-descriptions-item label="检测医生">{{ selectedDetection.doctor_name || '-' }}</el-descriptions-item>
-                <el-descriptions-item label="检测时间">{{ selectedDetection.timestamp }}</el-descriptions-item>
+                <el-descriptions-item label="检测时间">{{ formatDateTime(selectedDetection.timestamp) }}</el-descriptions-item>
                 <el-descriptions-item label="使用模型">{{ selectedDetection.model }}</el-descriptions-item>
                 <el-descriptions-item label="检测数量">{{ selectedDetection.count }}</el-descriptions-item>
                 <el-descriptions-item label="平均置信度">

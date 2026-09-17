@@ -46,7 +46,7 @@
       </el-form-item>
       
       <el-form-item label="最后修改时间" v-if="reportData.updated_at">
-        <el-text type="info">{{ reportData.updated_at }}</el-text>
+        <el-text type="info">{{ formatDateTime(reportData.updated_at) }}</el-text>
       </el-form-item>
     </el-form>
     
@@ -67,6 +67,7 @@
 import { ref, watch } from 'vue'
 import axios from '../utils/axios'
 import { ElMessage } from 'element-plus'
+import { formatDateTime } from '../utils/datetime'
 
 const props = defineProps({
   modelValue: {

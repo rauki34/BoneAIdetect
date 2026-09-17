@@ -127,6 +127,26 @@ def discover_users():
     return users
 
 
+def _read_advice(history_id):
+    """直连数据库读取某报告的医疗建议原文（用于验证后还原）"""
+    from core.bootstrap import build_bare_app
+    build_bare_app()
+    from database import DetectionHistory
+    row = DetectionHistory.query.filter_by(id=history_id).first()
+    return row.medical_advice if row else None
+
+
+def _write_advice(history_id, value):
+    """把医疗建议还原成验证之前的样子"""
+    from core.bootstrap import build_bare_app
+    build_bare_app()
+    from database import DetectionHistory, db
+    row = DetectionHistory.query.filter_by(id=history_id).first()
+    if row is not None:
+        row.medical_advice = value
+        db.session.commit()
+
+
 def make_scanned_pdf():
     """生成一个无文本层的 PDF（模拟扫描件）"""
     from pypdf import PdfWriter
@@ -343,6 +363,10 @@ def main():
             skip('保存解读后引用仍在', '库里没有检测记录可供保存')
         else:
             history_id = own[0]['id']
+            # **先备份该报告原有的医疗建议**：这个用例会覆盖真实数据。
+            # 不还原的话，用户的报告里会永久留下"《契约验证文档》"这种测试痕迹
+            # —— 这件事确实发生过一次，报告 #26 被写进了假引用。
+            original_advice = _read_advice(history_id)
             r = requests.post(f'{BASE}/api/history/{history_id}/advice',
                               headers=auth(TOKENS['admin']),
                               json={'interpretation': '契约验证：正文含引用 [1]',
@@ -363,6 +387,10 @@ def main():
                     saved = advice.get('references')
                     check('保存后 references 仍存在', bool(saved),
                           f'读回 {len(saved) if saved else 0} 条')
+
+            # 还原该报告原本的医疗建议，不留测试痕迹
+            _write_advice(history_id, original_advice)
+            print('      （已还原该报告原有的医疗建议）')
 
     # ---------- 6. 跨患者越权 ----------
     section('[6] 跨患者越权')
