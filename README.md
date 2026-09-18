@@ -238,6 +238,32 @@ npm run dev
 # 服务运行在 http://localhost:5173
 ```
 
+**终端4 - 启动Celery worker（训练与知识库入库）：**
+
+```bash
+cd backend
+bash scripts/celery.sh start
+# 日志: logs/celery.log
+```
+
+> **worker 必须单独起。** 训练与文档入库都在 worker 里执行，只起后端的话
+> 这两类任务会一直躺在队列里不动（接口会返回 202 已受理，但永远停在"处理中"）。
+> 队列依赖 Redis，所以要先 `bash scripts/redis.sh start` —— 脚本会替你检查。
+
+#### 启停脚本速查
+
+三个长驻组件（PostgreSQL / Redis / worker）都不是 Windows 服务，
+重启电脑后需要手动拉起。脚本都在 `backend/scripts/`：
+
+```bash
+bash scripts/pg.sh start        # PostgreSQL（含 pgvector）
+bash scripts/redis.sh start     # Redis（缓存 + 消息队列 broker）
+bash scripts/flask.sh start     # 后端（加 debug 参数可开 DEBUG 日志并放宽限流）
+bash scripts/celery.sh start    # Celery worker
+```
+
+各自的 `status` / `stop` / `log` 子命令同理；`celery.sh status` 会列出已注册的任务。
+
 #### 方式二：生产部署
 
 ```bash

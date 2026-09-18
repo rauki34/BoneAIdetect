@@ -38,10 +38,15 @@ case "${1:-}" in
     fi
     # AOF 持久化：Redis 现在同时是缓存与消息队列 broker，排队中的任务不能丢。
     # --dir 显式指定，否则 aof 文件会落在调用者的当前目录里。
+    #
+    # stdout/stderr 必须重定向掉：redis-server 是后台起的，若不重定向就会继承
+    # 调用方的管道，于是任何用 subprocess 以管道方式调用本脚本的程序都会**永久
+    # 挂住**（等一个永远不关闭的管道）。日志已经由 --logfile 接管，这里不需要。
     "$REDIS_HOME/redis-server.exe" --port "$REDIS_PORT" \
         --dir "$REDIS_HOME" \
         --save "" --appendonly yes \
-        --logfile "$LOGFILE" --daemonize no &
+        --logfile "$LOGFILE" --daemonize no \
+        > /dev/null 2>&1 < /dev/null &
     echo $! > "$PIDFILE"
     sleep 2
     "$REDIS_HOME/redis-cli.exe" -p "$REDIS_PORT" ping
