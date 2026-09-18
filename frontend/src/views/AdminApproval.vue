@@ -981,7 +981,15 @@
                 </el-button>
               </div>
             </template>
-            
+
+            <el-alert
+              type="info"
+              :closable="false"
+              show-icon
+              style="margin-bottom: 12px;"
+              title="训练完成后，需到「模型库」点击「发布」，医生才能在检测中选用该模型"
+            />
+
             <el-table :data="trainingTasks" style="width: 100%" v-loading="tasksLoading">
               <el-table-column prop="name" label="任务名称" min-width="150" show-overflow-tooltip />
               <el-table-column prop="base_model" label="基础模型" width="120" />
@@ -1928,7 +1936,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, computed, watch, nextTick } from 'vue'
+import { ref, reactive, onMounted, onUnmounted, computed, watch, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Setting, DocumentChecked, FirstAidKit, User, Camera, Picture, VideoCamera, MagicStick, TrendCharts, DataAnalysis, Document, Monitor, Collection, Search, Calendar, Bell, Plus, Edit, Delete, View, Upload, VideoPlay, Refresh, Folder, UploadFilled, ArrowLeft } from '@element-plus/icons-vue'
@@ -2831,10 +2839,26 @@ const loadTrainingTasks = async () => {
   try {
     const res = await axios.get('/api/training/tasks')
     trainingTasks.value = res.data.tasks || []
+    scheduleTrainingPoll()
   } catch (err) {
     ElMessage.error('加载训练任务失败')
   } finally {
     tasksLoading.value = false
+  }
+}
+
+// 训练由独立的 Celery worker 执行，进度只能靠轮询刷新。
+// 此前这里**没有轮询**（progressTimer 声明后从未被赋值，是个死变量），
+// 进度条必须手点"刷新"才会动。
+const scheduleTrainingPoll = () => {
+  const active = trainingTasks.value.some(
+    t => t.status === 'running' || t.status === 'pending')
+  if (progressTimer.value) {
+    clearTimeout(progressTimer.value)
+    progressTimer.value = null
+  }
+  if (active) {
+    progressTimer.value = setTimeout(loadTrainingTasks, 3000)
   }
 }
 
@@ -3859,6 +3883,14 @@ onMounted(() => {
     monthlyChart?.resize()
     genderChart?.resize()
   })
+})
+
+onUnmounted(() => {
+  // 训练轮询必须清掉，否则离开页面后定时器仍在跑
+  if (progressTimer.value) {
+    clearTimeout(progressTimer.value)
+    progressTimer.value = null
+  }
 })
 
 // 公告管理方法

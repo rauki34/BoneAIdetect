@@ -70,6 +70,14 @@ _DDL_COLUMNS = (
         'ALTER TABLE training_tasks '
         'ADD COLUMN IF NOT EXISTS celery_task_id VARCHAR(64)',
     ),
+    (
+        # 阶段 8：训练任务的最后更新时间，core/recovery.py 据此判断任务是否卡死。
+        # 注意 DDL 只能加列，**onupdate 是 SQLAlchemy 层的行为**，
+        # 已经在 database.TrainingTask 里声明了 —— 少了那半边这一列不会自己刷新。
+        'training_tasks.updated_at',
+        'ALTER TABLE training_tasks '
+        'ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP',
+    ),
 )
 
 

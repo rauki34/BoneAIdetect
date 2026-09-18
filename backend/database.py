@@ -518,6 +518,11 @@ class TrainingTask(db.Model):
     # worker 还没开始读它。已在执行的任务由 core.state 的 Redis 标志兜底。
     # 新增列由 store._DDL_COLUMNS 补（create_all 不会给已有表加列）
     celery_task_id = db.Column(db.String(64))
+    # 阶段 8：最后更新时间。core/recovery.py 靠它判断任务是否已经卡死。
+    # **onupdate 不能省**：DDL 加列不会带上它，缺了的话这一列永远是 NULL，
+    # 回收函数要么误杀要么完全不工作。
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow,
+                           onupdate=datetime.utcnow, index=True)
 
     # 关联模型
     model = db.relationship('CustomModel', backref='training_tasks')
@@ -1059,6 +1064,16 @@ def init_db(app):
                 logger.info("✅ 已回收 %d 个中断的入库任务", _stale)
         except Exception as e:
             logger.warning("回收中断入库任务失败: %s", e)
+
+        # 回收中断的训练任务（阶段 8）。worker 崩溃后 running 行不会自己结束，
+        # 前端进度条会永远卡住。理由与阈值取舍见 core/recovery.py
+        try:
+            from core.recovery import recover_stale_training_tasks
+            _stale = recover_stale_training_tasks()
+            if _stale:
+                logger.info("✅ 已回收 %d 个中断的训练任务", _stale)
+        except Exception as e:
+            logger.warning("回收中断训练任务失败: %s", e)
 
 
         # 初始化默认admin用户（如果不存在）
