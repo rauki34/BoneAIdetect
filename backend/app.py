@@ -3,6 +3,12 @@
 # 其中的配置会被静默忽略。
 import os
 import threading
+# 全部 9 个 @app.errorhandler 都用 datetime.utcnow() 拼响应里的 timestamp，
+# 而这个导入此前**从未存在**：任何走到错误处理器的请求都会在处理器内部抛
+# NameError，返回 500 的 HTML 调试页，而不是约定好的 JSON 错误体。
+# 阶段 8 验证 broker 故障时，限流层因 Redis 不可用抛异常 → 撞上这个 bug，
+# 才把它暴露出来。（正常路径不经过错误处理器，所以一直没被发现。）
+from datetime import datetime
 
 try:
     from dotenv import load_dotenv

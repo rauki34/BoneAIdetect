@@ -82,10 +82,14 @@ class Config:
     # 启动时预热模型。默认关闭，避免拖慢启动；首次检索会慢 10-30 秒
     RAG_WARMUP = _env('RAG_WARMUP', 'false').lower() == 'true'
     RAG_CACHE_TTL = int(_env('RAG_CACHE_TTL', 600))
+    # 上传体积上限。入库搬到 Celery 后（阶段 8）这一项仍然必要：
+    # 它限制的是 HTTP 请求体大小，与入库同步还是异步无关
     RAG_MAX_UPLOAD_MB = int(_env('RAG_MAX_UPLOAD_MB', 50))
-    # 单次上传的入库上限：入库是同步执行的，须留在浏览器/代理超时之内
-    RAG_MAX_UPLOAD_PAGES = int(_env('RAG_MAX_UPLOAD_PAGES', 30))
-    RAG_MAX_UPLOAD_CHUNKS = int(_env('RAG_MAX_UPLOAD_CHUNKS', 200))
+
+    # ---------- Celery（阶段 8）----------
+    # worker 与后端是两个进程，各自独立读环境变量
+    CELERY_BROKER_URL = _env('CELERY_BROKER_URL', 'redis://127.0.0.1:6379/1')
+    CELERY_RESULT_BACKEND = _env('CELERY_RESULT_BACKEND', 'redis://127.0.0.1:6379/2')
 
     # ---------- 限流 ----------
     RATE_LIMIT_AI = int(_env('RATE_LIMIT_AI', 10))            # AI 对话：次/分钟

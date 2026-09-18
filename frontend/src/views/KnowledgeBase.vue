@@ -51,6 +51,7 @@
             />
             <el-select v-model="statusFilter" size="small" style="width: 130px;" @change="loadDocs">
               <el-option label="全部状态" value="" />
+              <el-option label="待处理" value="pending" />
               <el-option label="就绪" value="ready" />
               <el-option label="处理中" value="processing" />
               <el-option label="失败" value="failed" />
@@ -404,9 +405,10 @@ const viewDoc = async (row) => {
 
 const reingest = async (row) => {
   try {
+    // 入库已异步化：这里只负责投递，切片数要等轮询到"就绪"才知道
     const res = await axios.post(`/api/knowledge/docs/${row.id}/reingest`)
     if (res.data.success) {
-      ElMessage.success(`重新入库完成，${res.data.chunks} 个切片`)
+      ElMessage.success('已提交重新入库，正在后台处理')
       loadAll()
     }
   } catch (e) {
@@ -457,20 +459,26 @@ const submitUpload = async () => {
         form.append(key, value)
       }
     })
-    const res = await axios.post('/api/knowledge/docs', form, {
-      timeout: 300000        // 入库是同步的，长文档需要时间
-    })
+    // 入库已异步化：端点只做校验、落盘、建 pending 行、投递，立刻返回。
+    // 用默认 30s 超时就够，切片与向量化交给 Celery worker
+    const res = await axios.post('/api/knowledge/docs', form)
     if (res.data.success) {
-      ElMessage.success(`入库完成，${res.data.chunks} 个切片`)
-      if (res.data.warning) ElMessage.warning(res.data.warning)
+      if (res.data.skipped) {
+        ElMessage.info('该文件内容未变，已存在，无需重复入库')
+      } else {
+        ElMessage.success('已提交入库，正在后台处理（下方列表会显示进度）')
+      }
       uploadVisible.value = false
       selectedFile.value = null
       uploadForm.value = { title: '', doc_type: 'guideline', origin: 'curated', source: '', patient_id: null }
       uploaderRef.value?.clearFiles()
+      // loadAll 会触发 schedulePoll：列表里出现 pending/processing 就每 3 秒刷新
       loadAll()
     }
   } catch (e) {
-    // 扫描件等用户可纠正的问题，后端返回 422 与明确文案，原样展示
+    // 表单校验类问题（类型不支持、缺出处、超限）仍是同步 4xx，原样展示。
+    // 而解析失败（扫描件等）现在发生在 worker 里，表现为该行变"失败"，
+    // 失败详情在列表的 alert 里可展开查看
     ElMessage.error(e.response?.data?.error || '上传失败')
     loadDocs()
   } finally {

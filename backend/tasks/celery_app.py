@@ -42,19 +42,21 @@ solo 池的并发度恒为 1，两个队列在一个 worker 里天然串行，�
 
 `RAG_DEVICE` 在 `config.py` 里是模块导入时求值的，所以在启动命令前 export 即可生效，不用改代码。
 """
-import os
-
 from core.bootstrap import load_env
 
-# 必须先于下面任何 `import config` / `os.environ.get` —— 理由见模块文档第 1 条
+# 必须先于下面 `import config` —— 理由见模块文档第 1 条
 load_env()
 
 from celery import Celery  # noqa: E402
 
+from config import config  # noqa: E402
+
 celery_app = Celery(
     'ortho',
-    broker=os.environ.get('CELERY_BROKER_URL', 'redis://127.0.0.1:6379/1'),
-    backend=os.environ.get('CELERY_RESULT_BACKEND', 'redis://127.0.0.1:6379/2'),
+    # 从 config 读而不是直接读 os.environ：环境变量名与默认值只在 config.py
+    # 维护一份，避免两处各写各的然后慢慢对不上
+    broker=config.CELERY_BROKER_URL,
+    backend=config.CELERY_RESULT_BACKEND,
     # 显式列出任务模块。不用 autodiscover：包名固定，写清楚更好读，
     # 也避免 autodiscover 去翻 tasks/ 下所有模块时把辅助模块也当任务模块导入。
     #
@@ -63,9 +65,9 @@ celery_app = Celery(
     # 漏写一个模块的症状是 worker 报 "Received unregistered task"，很好认。
     include=[
         'tasks.diagnostics',
-        # 以下两个模块随各自迁移步骤加入：
+        'tasks.knowledge',
+        # 随迁移步骤加入：
         #   'tasks.training'    —— 步骤 4
-        #   'tasks.knowledge'   —— 步骤 2
     ],
 )
 

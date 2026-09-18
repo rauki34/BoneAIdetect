@@ -52,6 +52,47 @@ def section(title):
     print(f'\n{title}')
 
 
+# ---------- 异步入库的等待helper（阶段 8） ----------
+
+def doc_status(doc_id, token_role='doctor'):
+    """读单个文档的状态；读不到返回 None"""
+    token = TOKENS.get(token_role)
+    if not token:
+        return None
+    r = requests.get(f'{BASE}/api/knowledge/docs/{doc_id}',
+                     headers=auth(token), timeout=30)
+    if r.status_code != 200:
+        return None
+    return r.json().get('data', {}).get('status')
+
+
+def doc_error_msg(doc_id, token_role='doctor'):
+    token = TOKENS.get(token_role)
+    if not token:
+        return None
+    r = requests.get(f'{BASE}/api/knowledge/docs/{doc_id}',
+                     headers=auth(token), timeout=30)
+    if r.status_code != 200:
+        return None
+    return r.json().get('data', {}).get('error_msg')
+
+
+def wait_doc_status(doc_id, want, timeout=180, poll=2):
+    """轮询到指定状态
+
+    入库搬去 Celery worker 后，上传响应里已经拿不到终态 —— 契约验证必须
+    改成"等它变成某个状态"。返回实际终态，超时返回最后观察到的状态。
+    """
+    deadline = time.time() + timeout
+    last = None
+    while time.time() < deadline:
+        last = doc_status(doc_id)
+        if last == want:
+            return last
+        time.sleep(poll)
+    return last
+
+
 # ---------- 登录（复用 verify_auth_flow 的验证码方案） ----------
 
 def fetch_captcha():
@@ -232,16 +273,30 @@ def main():
     # ---------- 2. 上传：扫描件诚实失败 ----------
     section('[2] 上传（扫描件应被明确拒绝，而非静默空入库）')
     if need('doctor', '上传相关校验'):
+        # 阶段 8 起入库异步：端点立刻返回 202，解析在 Celery worker 里跑，
+        # 因此"扫描件被拒"不再表现为 HTTP 422，而是该文档最终置 failed。
+        # 契约实际更强了 —— 上传本身不再被解析耗时卡住，失败原因照样留痕。
         r = requests.post(
             f'{BASE}/api/knowledge/docs',
             headers=auth(TOKENS['doctor']),
             files={'file': ('扫描件.pdf', make_scanned_pdf(), 'application/pdf')},
             data={'title': '契约验证-扫描件'},
-            timeout=120,
+            timeout=60,
         )
-        check('上传无文本层 PDF → 422', r.status_code == 422, f'HTTP {r.status_code}')
-        if r.status_code == 422:
-            print(f"      错误文案: {r.json().get('error', '')[:70]}")
+        check('上传无文本层 PDF → 202 受理', r.status_code == 202, f'HTTP {r.status_code}')
+        scanned_doc_id = r.json().get('doc_id') if r.status_code == 202 else None
+        if scanned_doc_id:
+            final = wait_doc_status(scanned_doc_id, 'failed', timeout=180)
+            check('该扫描件最终被置为失败（而非静默空入库）',
+                  final is not None, f'最终状态 = {final}')
+            if final == 'failed':
+                reason = doc_error_msg(scanned_doc_id)
+                check('失败原因写明「无文本层」', '无文本层' in (reason or ''),
+                      f'error_msg = {(reason or "")[:60]}')
+                print(f"      错误文案: {(reason or '')[:70]}")
+        else:
+            check('该扫描件最终被置为失败（而非静默空入库）', False, '未拿到 doc_id')
+            check('失败原因写明「无文本层」', False, '未拿到 doc_id')
 
         r = requests.post(
             f'{BASE}/api/knowledge/docs',
@@ -274,14 +329,19 @@ def main():
             data={'origin': 'curated', 'source': '契约验证自动生成'},
             timeout=120,
         )
-        if r.status_code == 200:
+        if r.status_code == 202:
+            # 标题在响应里就有（端点建行时就定好了），不必等入库完成
             title = r.json().get('title', '')
             check('标题回退到原始文件名（而非落盘 uuid）',
                   '契约验证-标题回退' in title, f'标题 = {title!r}')
             created_doc_id = r.json().get('doc_id')
+            # 入库完成才写回 chunk_count，这里顺带验证不变量
+            final = wait_doc_status(created_doc_id, 'ready', timeout=300)
+            check('上传的文档最终变为就绪', final == 'ready', f'最终状态 = {final}')
         else:
             check('标题回退到原始文件名（而非落盘 uuid）', False,
                   f'HTTP {r.status_code} {r.text[:100]}')
+            check('上传的文档最终变为就绪', False, '上传未受理')
             created_doc_id = None
 
     # ---------- 3. 检索预览 ----------
@@ -424,14 +484,22 @@ def main():
                           json={'query': 'x'}, timeout=30)
         check('患者访问知识库检索 → 403', r.status_code == 403, f'HTTP {r.status_code}')
 
-    # 清理本次验证产生的文档，避免污染知识库
-    if created_doc_id and 'admin' in TOKENS:
+    # 清理本次验证产生的文档，避免污染知识库。
+    # 扫描件那条也必须清：它是 failed 状态，不会被别的用例回收，
+    # 留着会一直在管理界面上挂着一条失败记录
+    cleaned = 0
+    for doc_id in (created_doc_id, locals().get('scanned_doc_id')):
+        if not doc_id or 'admin' not in TOKENS:
+            continue
         try:
-            requests.delete(f'{BASE}/api/knowledge/docs/{created_doc_id}',
-                            headers=auth(TOKENS['admin']), timeout=30)
-            print('\n  （已清理验证过程中创建的文档）')
+            r = requests.delete(f'{BASE}/api/knowledge/docs/{doc_id}',
+                                headers=auth(TOKENS['admin']), timeout=30)
+            if r.status_code == 200:
+                cleaned += 1
         except requests.exceptions.RequestException:
             pass
+    if cleaned:
+        print(f'\n  （已清理验证过程中创建的 {cleaned} 个文档）')
 
     print('\n' + '=' * 62)
     print(f'  通过 {len(PASS)} / 失败 {len(FAIL)} / 跳过 {len(SKIP)}')

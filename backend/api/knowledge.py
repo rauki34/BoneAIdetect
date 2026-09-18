@@ -7,7 +7,9 @@
 - 共享知识库是**机构数据**：医生可上传、可查看，但只有管理员能删除
 - 患者个人资料：需通过医患关联校验，医生只能操作自己关联的患者
 """
+import hashlib
 import json
+import mimetypes
 import os
 import uuid
 from datetime import datetime
@@ -21,6 +23,7 @@ from core.paths import KNOWLEDGE_UPLOAD_DIR
 from core.ratelimit import limit
 from database import KnowledgeChunk, KnowledgeDoc, safe_json_loads, db
 from services.rag.loader import SUPPORTED_EXTENSIONS, ScannedPdfError
+from services.rag.pipeline import RAGPipeline
 from services.rag.retriever import (
     RetrievalScope, get_retriever, shared_scope,
 )
@@ -110,17 +113,46 @@ def doc_chunks(doc_id):
         return jsonify({"success": False, "error": "无权访问该文档"}), 403
     limit_n = min(int(request.args.get('limit', 200)), 500)
     chunks = (doc.chunks.order_by(KnowledgeChunk.chunk_index).limit(limit_n).all())
-    return jsonify({"success": True, "data": [c.to_dict() for c in chunks]})
+    # status 一并返回：文档在 processing 时 chunks 为空，与"真的零切片"无法区分
+    return jsonify({"success": True, "status": doc.status,
+                    "data": [c.to_dict() for c in chunks]})
+
+
+def _enqueue_ingest(doc, username, force=False):
+    """把入库任务投进队列；成功返回 None，失败返回可直接 return 的响应
+
+    broker 不可用时**必须清掉刚建的那一行**：留下一行永远 pending 的文档，
+    前端会盯着它无限轮询，而队列里根本没有对应任务。
+    回报 503 让人知道是暂时性故障，而不是 500 让人以为代码坏了。
+
+    回滚由调用方做：上传时该删掉刚建的行，重新入库时该只还原状态。
+    """
+    from tasks.knowledge import ingest_document
+    try:
+        ingest_document.delay(doc.id, username=username, force=force)
+    except Exception as e:
+        logger.error('投递入库任务失败(doc_id=%s): %s', doc.id, e, exc_info=True)
+        db.session.rollback()
+        return ("任务队列不可用，文档未入库。请确认 Redis 与 Celery worker 已启动"
+                "（bash scripts/redis.sh start && bash scripts/celery.sh start）")
+    return None
 
 
 @bp.route("/api/knowledge/docs", methods=["POST"])
 @limit('kb_upload', key='user')
 @require_role('doctor', 'admin')
 def upload_doc():
-    """上传文档并同步入库
+    """上传文档并**异步入库**
 
-    同步执行（Celery 是后续阶段的事）。因此对页数与切片数设上限：
-    入库耗时必须留在前端与代理的超时之内，超出部分引导走命令行脚本。
+    端点只做校验、落盘、建 pending 行、投递任务，然后立刻返回 doc_id。
+    切片与向量化在 Celery worker 里跑，文档状态经 pending → processing →
+    ready/failed，前端按 3 秒轮询刷新。
+
+    这样做的收益不只是"请求变快"：解析失败（扫描件等）以前必须在 HTTP
+    响应里同步返回 422，现在变成文档置 failed 并把原因写进 error_msg，
+    失败详情在管理界面上直接可见，且上传不再被解析耗时卡住。
+
+    不再返回 chunks（此刻还没有切片），改为返回 status='pending'。
     """
     from flask import current_app
 
@@ -170,47 +202,56 @@ def upload_doc():
     with open(path, 'wb') as fh:
         fh.write(raw)
 
-    from services.rag.pipeline import RAGPipeline
-    result = RAGPipeline().ingest_file(
-        path,
-        # 标题留空时回退到**客户端原名**，而不是落盘的 uuid 名
-        title=request.form.get('title') or Path(original_name).stem,
-        doc_type=request.form.get('doc_type') or None,
+    file_hash = hashlib.sha256(raw).hexdigest()
+    title = request.form.get('title') or Path(original_name).stem
+
+    # 去重必须在建行之前做，否则会留下一条永远不会被处理的 pending 行：
+    # 入库任务走到 ingest_doc_row 时会发现内容未变而跳过，那一行就没人管了，
+    # 前端还会一直轮询它。CLI 与 verify 脚本重跑时必然触发这条路径。
+    existing = RAGPipeline._find_existing(file_hash, patient_id, path)
+    if existing is not None and existing.file_hash == file_hash:
+        return jsonify({
+            "success": True,
+            "doc_id": existing.id,
+            "title": existing.title,
+            "status": existing.status,
+            "skipped": True,
+            "reason": '内容未变，已存在',
+        })
+
+    doc = KnowledgeDoc(
+        title=title,
+        doc_type=request.form.get('doc_type') or 'other',
         department=request.form.get('department') or None,
-        source=source or None,
+        source=source or '',
         origin=origin,
+        file_path=path,
+        file_hash=file_hash,
+        file_size=len(raw),
+        mime_type=mimetypes.guess_type(original_name)[0] or 'application/octet-stream',
         patient_id=patient_id,
         uploaded_by=user.id,
-        apply=True,
-        original_filename=original_name,
+        status='pending',
+        doc_meta=json.dumps({'original_filename': original_name}, ensure_ascii=False),
     )
+    db.session.add(doc)
+    db.session.commit()
 
-    if result.status == 'failed':
-        log_operation(f'知识库上传失败: {file.filename}', False, result.error)
-        # 扫描件属于"用户可自行纠正"的失败，用 422 与明确文案区分于服务端错误
-        code = 422 if '无文本层' in (result.error or '') else 500
-        return jsonify({
-            "success": False,
-            "error": result.error or '入库失败',
-            "doc_id": result.doc_id,
-        }), code
+    err = _enqueue_ingest(doc, username=user.username)
+    if err is not None:
+        # 删掉刚建的行：留下它前端会盯着一条永远不会被处理的 pending 文档
+        db.session.delete(doc)
+        db.session.commit()
+        return jsonify({"success": False, "error": err}), 503
 
-    # 同步入库的规模上限：超出部分在响应里明确告知，引导走脚本
-    max_chunks = int(current_app.config.get('RAG_MAX_UPLOAD_CHUNKS', 200))
-    warning = None
-    if result.chunks > max_chunks:
-        warning = (f'本次入库 {result.chunks} 个切片，超过建议上限 {max_chunks}；'
-                   f'大批量资料建议使用 scripts/ingest_knowledge.py')
-
-    log_operation(f'知识库上传: {result.title} → {result.chunks} 切片')
+    # 审计留在这里（"谁提交了什么"），入库结果的那条由 worker 补
+    log_operation(f'知识库上传已受理: {title}（待入库）')
     return jsonify({
         "success": True,
-        "doc_id": result.doc_id,
-        "title": result.title,
-        "chunks": result.chunks,
-        "status": result.status,
-        "warning": warning,
-    })
+        "doc_id": doc.id,
+        "title": doc.title,
+        "status": doc.status,
+    }), 202
 
 
 @bp.route("/api/knowledge/docs/<int:doc_id>", methods=["DELETE"])
@@ -235,6 +276,15 @@ def delete_doc(doc_id):
     elif not can_access_patient(user, doc.patient_id):
         return jsonify({"success": False, "error": "无权删除该文档"}), 403
 
+    # 正在入库的文档不能删：worker 拿着 doc_id 往这一行里写切片，
+    # 行没了它会继续往一个已删除的 doc_id 写，留下无人认领的切片。
+    # 入库是分钟级的事，让使用者稍后重试即可。
+    if doc.status == 'processing':
+        return jsonify({
+            "success": False,
+            "error": "文档正在入库中，请等状态变为「就绪」或「失败」后再删除",
+        }), 409
+
     title = doc.title
     # 只删上传落盘的文件；语料目录里的文件随仓库管理，不在此处删
     if doc.file_path and os.path.abspath(doc.file_path).startswith(
@@ -256,7 +306,12 @@ def delete_doc(doc_id):
 @limit('kb_upload', key='user')
 @require_role('admin')
 def reingest_doc(doc_id):
-    """重新入库（切片策略调整、或上次失败后重试）"""
+    """重新入库（切片策略调整、或上次失败后重试）
+
+    走 `ingest_doc_row` 而不是 `ingest_file`：后者会 delete 旧行再建新行，
+    **doc_id 会变**。前端「重试」按钮就长在这一行上，行没了它会在列表里
+    突然消失又出现；verify 脚本按 doc_id 做的清理也会失败。
+    """
     doc = db.session.get(KnowledgeDoc, doc_id)
     if not doc:
         return jsonify({"success": False, "error": "文档不存在"}), 404
@@ -265,19 +320,33 @@ def reingest_doc(doc_id):
             "success": False,
             "error": "该文档没有可用的原始文件（可能是由病历派生的记录）",
         }), 400
+    if doc.status == 'processing':
+        return jsonify({
+            "success": False,
+            "error": "文档正在入库中，无需重复提交",
+        }), 409
 
-    from services.rag.pipeline import RAGPipeline
-    result = RAGPipeline().ingest_file(
-        doc.file_path, title=doc.title, doc_type=doc.doc_type,
-        department=doc.department, source=doc.source, origin=doc.origin,
-        patient_id=doc.patient_id, uploaded_by=doc.uploaded_by,
-        apply=True, replace=True,
-    )
-    if result.status == 'failed':
-        log_operation(f'知识库重新入库失败: {doc.title}', False, result.error)
-        return jsonify({"success": False, "error": result.error}), 500
-    log_operation(f'知识库重新入库: {result.title} → {result.chunks} 切片')
-    return jsonify({"success": True, "chunks": result.chunks})
+    # 先置 pending 让前端立刻进入轮询；投递失败再还原，别让 UI 停在"排队中"
+    prev_status = doc.status
+    doc.status = 'pending'
+    db.session.commit()
+
+    # force=True：内容多半没变，但重新入库的本意就是推倒重来
+    err = _enqueue_ingest(doc, username=get_current_user().username, force=True)
+    if err is not None:
+        doc = db.session.get(KnowledgeDoc, doc_id)
+        if doc is not None:
+            doc.status = prev_status
+            db.session.commit()
+        return jsonify({"success": False, "error": err}), 503
+
+    log_operation(f'知识库重新入库已受理: {doc.title}')
+    return jsonify({
+        "success": True,
+        "doc_id": doc.id,
+        "title": doc.title,
+        "status": doc.status,
+    }), 202
 
 
 @bp.route("/api/knowledge/search", methods=["POST"])

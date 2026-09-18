@@ -38,24 +38,33 @@ def can_access_patient(user, patient_id):
 
 # ==================== 操作日志接口（借鉴pear-admin-flask）====================
 
-def log_operation(description, success=True, error_msg=None):
-    """记录操作日志的辅助函数"""
+def log_operation(description, success=True, error_msg=None, username=None):
+    """记录操作日志的辅助函数
+
+    `username` 用于显式指定操作人，覆盖从请求头推断的结果。
+
+    需要它的场景是 Celery worker（阶段 8）：入库这类长任务搬到 worker 后
+    已经没有请求上下文，本函数会退回记 `system` —— 医疗场景下审计记录丢掉
+    操作人是合规性倒退。因此 HTTP 端把 `user.username` 一并投递给任务，
+    worker 再显式传进来。
+    """
     try:
         # 获取请求上下文中的信息
         try:
-            username = request.headers.get('X-Username', 'anonymous') if request else 'system'
+            username = username or (
+                request.headers.get('X-Username', 'anonymous') if request else 'system')
             method = request.method if request else 'SYSTEM'
             url = request.path if request else ''
             ip = request.remote_addr if request else ''
             user_agent = request.headers.get('User-Agent', '') if request else ''
         except RuntimeError:
             # 不在请求上下文中
-            username = 'system'
+            username = username or 'system'
             method = 'SYSTEM'
             url = ''
             ip = ''
             user_agent = ''
-        
+
         log = OperationLog(
             username=username,
             method=method,

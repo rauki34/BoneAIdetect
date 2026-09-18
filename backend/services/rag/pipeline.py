@@ -145,6 +145,110 @@ class RAGPipeline:
             doc_meta_extra=doc_meta_extra,
         )
 
+    # ---------- 异步入口（阶段 8，供 Celery worker 调用） ----------
+
+    def ingest_doc_row(self, doc_id, *, force=False, batch_size=None):
+        """把一行**已存在**的 KnowledgeDoc 真正切片入库
+
+        与 `ingest_file` 的分工：那个入口自己 `_find_existing` → delete 旧行 →
+        建新行，适合 CLI 与批量语料。而异步路径是反过来的 ——
+        HTTP 端点先建好 pending 行并**立刻把 doc_id 返回给前端**，worker 再往
+        这一行里填内容。
+
+        这时若让 worker 走 `ingest_file`，`_find_existing` 会按 file_path 命中
+        端点刚建的那一行，判定"内容已变"后 delete + 重建，**doc_id 当场改变**：
+        前端手里的 id 失效，`reingest` 按钮所在的行会突然消失又出现，
+        验证脚本按 doc_id 做的清理也会失败。
+
+        失败态同样由**这一行**承接，不另建新行 —— `_record_failure()` 是为
+        "解析时就失败、还没有行"的场景写的，异步路径里再调用它就会多出一行，
+        而预建的 pending 行永远没人回收，前端还会盯着它无限轮询。
+
+        返回 IngestResult（status 为 ready / failed / skipped）。
+        """
+        started = time.time()
+        doc = db.session.get(KnowledgeDoc, doc_id)
+        if doc is None:
+            # 排队期间被删掉了（delete_doc 有 status 守卫，这里只是兜底）
+            logger.warning('入库任务的目标文档不存在，可能已被删除: doc_id=%s', doc_id)
+            return IngestResult(doc_id=doc_id, status='failed',
+                                error='文档已被删除')
+
+        if doc.status == 'ready' and not force:
+            return IngestResult(title=doc.title, doc_id=doc.id, status='ready',
+                                chunks=doc.chunk_count, skipped=True,
+                                reason='已入库，跳过')
+
+        if not doc.file_path:
+            return self._fail_row(doc, '该文档没有可解析的源文件（可能是由病历派生的记录）')
+
+        # 规则 1：先落 processing 再干活，管理界面立刻能看到"处理中"
+        doc.status = 'processing'
+        doc.error_msg = None
+        db.session.commit()
+
+        path = Path(doc.file_path)
+        try:
+            loaded = load_document(path, fallback_title=doc.title)
+        except LoadError as e:
+            # 扫描件、损坏文件等：属于使用者可自行纠正的问题，
+            # 原样保留 LoadError 的文案（前端失败详情直接展示它）
+            logger.warning('知识库解析失败: %s - %s', doc.title, e)
+            return self._fail_row(doc, str(e), invalidate=True)
+        except Exception as e:
+            logger.error('知识库解析异常: %s - %s', doc.title, e, exc_info=True)
+            return self._fail_row(doc, f'解析失败: {e}', invalidate=True)
+
+        try:
+            chunks = self.splitter.split(loaded)
+            if not chunks:
+                raise ValueError('切片结果为空，文档可能没有可索引的正文')
+
+            doc.char_count = loaded.char_count
+            if loaded.meta.get('language'):
+                doc.language = loaded.meta['language']
+            db.session.commit()
+
+            self._embed_and_store(doc, chunks, batch_size)
+
+            # 规则 3：切片写完了才置 ready，不变量"切片存在 ⟺ ready"由这次的
+            # 单次 commit 守住
+            doc.status = 'ready'
+            doc.chunk_count = len(chunks)
+            doc.error_msg = None
+            db.session.commit()
+            store.invalidate_cache()
+
+            logger.info('知识库入库完成: %s → %d 切片 (%.1fs)',
+                        doc.title, len(chunks), time.time() - started)
+            return IngestResult(
+                title=doc.title, path=str(path), doc_id=doc.id,
+                status='ready', chunks=len(chunks),
+                elapsed=time.time() - started, warnings=loaded.warnings,
+            )
+        except Exception as e:
+            db.session.rollback()
+            self._cleanup_failed(doc, e)
+            store.invalidate_cache()
+            logger.error('知识库入库失败: %s - %s', doc.title, e, exc_info=True)
+            return IngestResult(
+                title=doc.title, path=str(path), doc_id=doc.id,
+                status='failed', error=str(e)[:1000],
+                elapsed=time.time() - started,
+            )
+
+    @staticmethod
+    def _fail_row(doc, error, invalidate=False):
+        """把已存在的那一行置为 failed（不另建新行）"""
+        doc.status = 'failed'
+        doc.error_msg = str(error)[:1000]
+        doc.chunk_count = 0
+        db.session.commit()
+        if invalidate:
+            store.invalidate_cache()
+        return IngestResult(title=doc.title, path=doc.file_path or '',
+                            doc_id=doc.id, status='failed', error=str(error)[:1000])
+
     def _ingest(self, loaded, *, file_hash, file_path, title, doc_type,
                 department, source, origin, patient_id, uploaded_by, apply,
                 replace, batch_size, file_size, mime_type, original_filename,
