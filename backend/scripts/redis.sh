@@ -64,16 +64,18 @@ case "${1:-}" in
     "$REDIS_HOME/redis-cli.exe" -p "$REDIS_PORT"
     ;;
   keys)
-    "$REDIS_HOME/redis-cli.exe" -p "$REDIS_PORT" --scan --pattern 'rl:*'
-    "$REDIS_HOME/redis-cli.exe" -p "$REDIS_PORT" --scan --pattern 'captcha:*'
-    "$REDIS_HOME/redis-cli.exe" -p "$REDIS_PORT" --scan --pattern 'train:stop:*'
+    # 用 keys 而非 --scan：tporadowski 这个 Windows 构建的 redis-cli **不支持
+    # --scan**，它会静默返回空结果（不报错），看起来像"一个键都没有"。
+    # keyspace 很小，KEYS 的开销可以接受。
+    "$REDIS_HOME/redis-cli.exe" -p "$REDIS_PORT" keys 'rl:*'
+    "$REDIS_HOME/redis-cli.exe" -p "$REDIS_PORT" keys 'captcha:*'
+    "$REDIS_HOME/redis-cli.exe" -p "$REDIS_PORT" keys 'train:stop:*'
     ;;
   queues)
     # Celery 队列与结果后端在 db1 / db2（见 tasks/celery_app.py），缓存用 db0
     for db in 1 2; do
       echo "--- db$db ---"
-      "$REDIS_HOME/redis-cli.exe" -p "$REDIS_PORT" -n "$db" --scan --pattern '*' \
-        | head -20
+      "$REDIS_HOME/redis-cli.exe" -p "$REDIS_PORT" -n "$db" keys '*' | head -20
     done
     ;;
   *)

@@ -150,9 +150,10 @@ case "${1:-}" in
     tail -f "$LOGFILE"
     ;;
   queues)
+    # 用 keys 而非 --scan：本机 redis-cli 的构建不支持 --scan，会静默返回空
     for db in 1 2; do
       echo "--- redis db$db ---"
-      "$REDIS_CLI" -p 6379 -n "$db" --scan --pattern '*' 2>/dev/null | head -20
+      "$REDIS_CLI" -p 6379 -n "$db" keys '*' 2>/dev/null | head -20
     done
     ;;
   *)

@@ -22,7 +22,7 @@ from functools import wraps
 from flask import current_app, jsonify, request
 
 from core.auth import get_current_user
-from core.cache import get_redis
+from core.cache import get_redis, report_failure
 from core.helpers import log_operation
 from core.state import RATE_LIMIT_CONFIG, rate_limit_lock, rate_limit_storage
 from utils.logger import logger
@@ -110,7 +110,12 @@ def check_rate_limit(ident, limit_type='api_general'):
 
     client = get_redis()
     if client is not None:
-        return _check_redis(client, ident, limit_type, max_requests, window)
+        try:
+            return _check_redis(client, ident, limit_type, max_requests, window)
+        except Exception as e:
+            # Redis 运行中挂掉：缓存的客户端是死的，这里必须降级而不是把异常
+            # 抛给请求。限流在登录路径上，抛出去等于 Redis 一挂就没人能登录
+            report_failure(e)
     return _check_memory(ident, limit_type, max_requests, window)
 
 

@@ -56,8 +56,30 @@ def get_redis():
         return None
 
 
-def redis_available() -> bool:
-    return get_redis() is not None
+def report_failure(exc=None):
+    """**Redis 操作中途失败**时由调用方调用 —— 丢弃死客户端并进入冷却
+
+    补的是一个 get_redis() 覆盖不到的口子：它的降级只处理**建立连接**失败。
+    已经缓存下来的客户端，在 Redis 运行中挂掉之后连接池里的连接全是死的，
+    后续调用会直接抛异常，而不是让 get_redis() 返回 None。症状是
+    Redis 挂掉后的第一批请求失败，要等 _RETRY_INTERVAL 冷却到期才恢复降级。
+
+    医疗场景下缓存组件故障不该让医护用不了系统，所以各调用方捕获异常后
+    调本函数：下一次 get_redis() 会重新尝试连接（成功则恢复，失败则返回
+    None，调用方走进程内降级）。
+
+    用法：
+        try:
+            ...用 client 干活...
+        except Exception as e:
+            report_failure(e)
+            return 进程内降级实现()
+    """
+    global _client, _last_failure
+    _client = None
+    _last_failure = time.time()
+    if exc is not None:
+        logger.warning('Redis 操作失败，本进程改用进程内实现: %s', exc)
 
 
 def reset():

@@ -7,7 +7,7 @@ Redis 不可用时降级为进程内 dict，保证登录流程不受影响。
 """
 import time
 
-from core.cache import get_redis
+from core.cache import get_redis, report_failure
 from core.state import CAPTCHA_TIMEOUT, captcha_store
 
 _KEY_PREFIX = 'captcha:'
@@ -17,8 +17,13 @@ def save_captcha(captcha_id, code):
     """保存验证码（TTL = CAPTCHA_TIMEOUT）"""
     client = get_redis()
     if client is not None:
-        client.setex(f'{_KEY_PREFIX}{captcha_id}', CAPTCHA_TIMEOUT, code)
-        return
+        try:
+            client.setex(f'{_KEY_PREFIX}{captcha_id}', CAPTCHA_TIMEOUT, code)
+            return
+        except Exception as e:
+            # Redis 运行中挂掉时缓存的客户端是死的，必须降级 ——
+            # 验证码在登录路径上，抛出去等于 Redis 一挂谁也别想登录
+            report_failure(e)
 
     captcha_store[captcha_id] = {
         'code': code,
@@ -38,12 +43,18 @@ def consume_captcha(captcha_id):
     """
     client = get_redis()
     if client is not None:
-        key = f'{_KEY_PREFIX}{captcha_id}'
-        pipe = client.pipeline()
-        pipe.get(key)
-        pipe.delete(key)
-        code, _ = pipe.execute()
-        return code, code is None
+        try:
+            key = f'{_KEY_PREFIX}{captcha_id}'
+            pipe = client.pipeline()
+            pipe.get(key)
+            pipe.delete(key)
+            code, _ = pipe.execute()
+            return code, code is None
+        except Exception as e:
+            report_failure(e)
+            # 落到下面的进程内分支。注意本函数在 Redis 正常时**不会**写进程内
+            # dict，所以这里多半取不到 —— 但取不到就是"验证码不存在"，
+            # 会要求重新拉一个，不会误放行
 
     data = captcha_store.pop(captcha_id, None)
     if data is None or data['expire_time'] < time.time():
