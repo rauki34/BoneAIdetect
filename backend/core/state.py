@@ -102,5 +102,67 @@ video_tasks = {}          # {task_id: {...}}
 # 注：flask_sock 的 Sock 扩展需绑定 app 实例，其路由保留在 app.py
 
 # ---------- 模型训练 ----------
-training_tasks = {}       # {task_id: {...}}
+
+# 停止标志（阶段 8 起以 Redis 为准）
+#
+# 训练任务搬到 Celery worker 后，Web 进程写、worker 进程读，**跨进程**。
+# 原来那个进程内 dict 在 worker 里永远读不到 Web 进程写的值，所以标志必须
+# 放 Redis。这个 dict 保留为 Redis 不可用时的降级实现（此时 broker 也不可用，
+# 训练任务根本投不进来，属于防御性保留）。
 training_stop_flags = {}  # {task_id: bool}
+
+_TRAIN_STOP_PREFIX = 'train:stop:'
+_TRAIN_STOP_TTL = 24 * 3600      # 一天足够覆盖任何训练；避免键无限累积
+
+
+def _stop_key(task_id):
+    return f'{_TRAIN_STOP_PREFIX}{task_id}'
+
+
+def set_training_stop(task_id):
+    """请求停止某个训练任务"""
+    from core.cache import get_redis, report_failure
+
+    client = get_redis()
+    if client is not None:
+        try:
+            client.setex(_stop_key(task_id), _TRAIN_STOP_TTL, '1')
+            return
+        except Exception as e:
+            report_failure(e)
+    training_stop_flags[task_id] = True
+
+
+def is_training_stop(task_id):
+    """训练回调每轮检查一次
+
+    注意 solo 池下已在执行的任务无法被 revoke 强行中断，只能靠这里的
+    协作式标志 —— 所以它每轮都会被读到，不能省。
+    """
+    from core.cache import get_redis
+
+    client = get_redis()
+    if client is not None:
+        try:
+            return bool(client.exists(_stop_key(task_id)))
+        except Exception as e:
+            from core.cache import report_failure
+            report_failure(e)
+    return bool(training_stop_flags.get(task_id, False))
+
+
+def clear_training_stop(task_id):
+    """训练收尾时清掉标志
+
+    键本来有 TTL 会自己过期，但同一 task_id 不会被复用，留着只是脏数据；
+    更重要的是让"停止"这个动作在状态上有个明确的终点。
+    """
+    from core.cache import get_redis, report_failure
+
+    training_stop_flags.pop(task_id, None)
+    client = get_redis()
+    if client is not None:
+        try:
+            client.delete(_stop_key(task_id))
+        except Exception as e:
+            report_failure(e)

@@ -62,6 +62,14 @@ _DDL_COLUMNS = (
         'ALTER TABLE ai_conversations '
         'ADD COLUMN IF NOT EXISTS "references" TEXT',
     ),
+    (
+        # 阶段 8：训练任务搬到 Celery 后，停止排队中的任务要 revoke 它的 task id。
+        # 列定义在 database.TrainingTask，但 create_all() 对**已存在**的表完全
+        # 不做改动，所以必须在这里补一条。
+        'training_tasks.celery_task_id',
+        'ALTER TABLE training_tasks '
+        'ADD COLUMN IF NOT EXISTS celery_task_id VARCHAR(64)',
+    ),
 )
 
 

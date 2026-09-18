@@ -58,8 +58,11 @@ from core.paths import MODEL_CANDIDATES, RESULTS, UPLOADS  # noqa: E402,F401
 from core.state import (  # noqa: E402,F401
     RATE_LIMIT_CONFIG, init_models,
     load_models, models, rate_limit_lock, rate_limit_storage,
-    training_stop_flags, training_tasks, video_tasks,
+    is_training_stop, set_training_stop, video_tasks,
 )
+# 注：原先此处还转发 core.state 的 training_tasks（一个从未被读写的死 dict），
+# 阶段 8 迁移训练任务时一并删除。training_stop_flags 也已不再是调用入口 ——
+# 它降级为 Redis 不可用时的后备存储，改用上面的 set/is_training_stop 访问。
 from core.auth import (  # noqa: E402,F401
     get_current_user, require_admin, require_auth, require_role,
 )

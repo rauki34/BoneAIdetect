@@ -75,7 +75,9 @@ case "${1:-}" in
       echo "   bash scripts/flask.sh status"
       exit 1
     fi
-    if ! powershell -NoProfile -Command "if (Test-Path '$VENV_PY') { exit 0 } else { exit 1 }"; then
+    # 用 bash 的 -f 而不是 PowerShell 的 Test-Path：后者拿到的 /d/... 是
+    # Git Bash 的 POSIX 路径，PowerShell 不认识，永远判为不存在
+    if [ ! -f "$VENV_PY" ]; then
       echo "❌ 找不到 venv 解释器: $VENV_PY"
       exit 1
     fi

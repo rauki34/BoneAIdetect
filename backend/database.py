@@ -513,7 +513,12 @@ class TrainingTask(db.Model):
     completed_at = db.Column(db.DateTime)
     created_by = db.Column(db.String(80))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    
+    # 阶段 8：Celery 的 task id。唯一用途是停止时 revoke 掉**还在队列里、
+    # 尚未被 worker 取走**的任务 —— 那种情况下协作式停止标志无效，因为
+    # worker 还没开始读它。已在执行的任务由 core.state 的 Redis 标志兜底。
+    # 新增列由 store._DDL_COLUMNS 补（create_all 不会给已有表加列）
+    celery_task_id = db.Column(db.String(64))
+
     # 关联模型
     model = db.relationship('CustomModel', backref='training_tasks')
     

@@ -66,8 +66,7 @@ celery_app = Celery(
     include=[
         'tasks.diagnostics',
         'tasks.knowledge',
-        # 随迁移步骤加入：
-        #   'tasks.training'    —— 步骤 4
+        'tasks.training',
     ],
 )
 

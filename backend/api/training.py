@@ -6,21 +6,22 @@ import glob
 import json
 import os
 import shutil
-import sys
-import threading
 import time
 from datetime import datetime
 
-import torch
 from flask import Blueprint, jsonify, request
 from ultralytics import YOLO
 
 from core.auth import get_current_user, require_auth, require_role
-from core.helpers import Logger, log_operation
+from core.helpers import log_operation
 from core.paths import BASE_DIR, BASE_MODEL_MAP, MODELS_DIR, UPLOADS
-from core.state import models, training_stop_flags
+from core.state import models, set_training_stop
 from database import CustomModel, TrainingTask, db
 from utils.logger import logger
+
+# 阶段 8：训练执行逻辑已迁至 tasks/training.py 并由 Celery worker 运行。
+# 随之移除的导入：threading / sys / torch（裸线程与 stdout 劫持已不在本进程）
+# 与 Logger（训练日志现在由 worker 侧的 FileHandler 写）。
 
 bp = Blueprint('training', __name__)
 
@@ -506,19 +507,24 @@ def train_model():
     db.session.add(task)
     db.session.commit()
 
-    # 启动异步训练线程
     if is_continued_training:
         base_model_path = base_model_info.model_path
     else:
         base_model_path = BASE_MODEL_MAP.get(base_model, base_model)
 
-    thread = threading.Thread(
-        target=train_model_task,
-        args=(task.id, custom_model.id, base_model_path, dataset_dir, epochs, batch_size, img_size,
-              is_continued_training, use_best_hyperparams)
-    )
-    thread.daemon = True
-    thread.start()
+    # 投递到 Celery（阶段 8）。原先这里是裸 threading.Thread：Web 进程一重启
+    # 任务就没了，且多进程部署时停止标志不共享。现在换成队列，任务持久化在
+    # Redis 里，由独立的 worker 进程执行。
+    err = _enqueue_training(task, custom_model, base_model_path, dataset_dir,
+                            epochs, batch_size, img_size,
+                            is_continued_training, use_best_hyperparams, username)
+    if err is not None:
+        # 队列不可用时把刚建的两行清掉：留着会让界面上出现一个永远不会动的
+        # "训练中"模型，而且它的 status 是 training，医生端不会列出来但也删不掉
+        db.session.delete(task)
+        db.session.delete(custom_model)
+        db.session.commit()
+        return jsonify({"success": False, "error": err}), 503
 
     log_operation(f"开始训练模型:{model_name},基础模型:{base_model},创建者:{username}")
 
@@ -526,8 +532,36 @@ def train_model():
         "success": True,
         "model_id": custom_model.id,
         "task_id": task.id,
-        "message": "模型训练任务已启动"
+        "message": "模型训练任务已提交队列"
     })
+
+
+def _enqueue_training(task, custom_model, base_model_path, dataset_dir, epochs,
+                      batch_size, img_size, is_continued_training,
+                      use_best_hyperparams, username):
+    """投递训练任务；成功返回 None，失败返回给用户看的错误文案
+
+    broker 不可用时 `.delay()` 会抛 OperationalError。不处理的话请求直接 500
+    并留下一条永远 running 的记录，所以这里必须捕获并回滚。
+    """
+    from tasks.training import run_training_task
+    try:
+        async_result = run_training_task.delay(
+            task.id, custom_model.id, base_model_path, dataset_dir,
+            epochs, batch_size, img_size,
+            is_continued_training, use_best_hyperparams, username=username,
+        )
+    except Exception as e:
+        logger.error('投递训练任务失败(task_id=%s): %s', task.id, e, exc_info=True)
+        db.session.rollback()
+        return ('任务队列不可用，训练未启动。请确认 Redis 与 Celery worker 已启动'
+                '（bash scripts/redis.sh start && bash scripts/celery.sh start）')
+
+    # 记下 Celery 的 task id：停止时若任务还在队列里没被消费，
+    # 只能靠 revoke(它) 拦住；协作式停止标志对还没开始的任务不起作用
+    task.celery_task_id = async_result.id
+    db.session.commit()
+    return None
 
 @bp.route("/api/training/tasks/<int:task_id>/progress", methods=["GET"])
 @require_auth
@@ -836,8 +870,15 @@ def stop_training_task(task_id):
     if task.status != 'running':
         return jsonify({"error": f"任务当前状态为 {task.status}，无法终止"}), 400
 
-    # 设置停止标志
-    training_stop_flags[task_id] = True
+    # 停止要覆盖**两种**情形，缺一不可：
+    #   1. 任务还在队列里没被消费 —— 标志没用（worker 还没读它），
+    #      必须 revoke 把消息从队列里撤掉；
+    #   2. 任务已经在跑 —— revoke 在 solo 池下**无效**（没有 terminate_job），
+    #      只能靠协作式标志，由训练回调每轮读一次。
+    revoked = _revoke_training(task.celery_task_id)
+
+    # 设置停止标志（Redis，跨进程可读）
+    set_training_stop(task_id)
 
     # 更新任务状态
     task.status = 'stopped'
@@ -854,283 +895,31 @@ def stop_training_task(task_id):
 
     return jsonify({
         "success": True,
-        "message": "训练任务已终止"
+        # 两种情形的用户预期不同，文案要分开：撤销掉排队任务就是立刻结束；
+        # 已在跑的任务只能等当前 epoch 跑完，别让用户以为它已经停了
+        "message": ("训练任务已终止（尚未开始，已从队列撤销）" if revoked
+                    else "已发出终止请求，任务将在当前轮次结束后停止"),
+        "revoked": revoked,
     })
 
-def train_model_task(task_id, model_id, base_model_path, dataset_dir, epochs, batch_size, img_size,
-                     is_continued_training=False, use_best_hyperparams=False):
-    """异步训练模型任务"""
-    with current_app.app_context():
-        task = db.session.get(TrainingTask, task_id)
-        custom_model = db.session.get(CustomModel, model_id)
-        
-        if not task or not custom_model:
-            return
-        
-        # 设置日志记录
-        logger = None
-        if task.log_file:
-            os.makedirs(os.path.dirname(task.log_file), exist_ok=True)
-            logger = Logger(task.log_file)
-            sys.stdout = logger
-        
-        try:
-            from ultralytics import YOLO
-            import time
-            
-            # 加载基础模型
-            if is_continued_training:
-                if os.path.exists(base_model_path):
-                    model = YOLO(base_model_path)
-                    print(f"从已有模型继续训练: {base_model_path}")
-                else:
-                    task.status = 'failed'
-                    task.error_message = f'基础模型文件不存在: {base_model_path}'
-                    custom_model.status = 'failed'
-                    db.session.commit()
-                    return
-            else:
-                # 标准模型训练
-                base_model_file = os.path.join(MODELS_DIR, f'{base_model_path}.pt')
-                print(f"标准模型训练，加载: {base_model_file}")
-                if os.path.exists(base_model_file):
-                    model = YOLO(base_model_file)
-                    print(f"✓ 成功加载本地模型: {base_model_file}")
-                else:
-                    print(f"⚠ 本地模型不存在，尝试从Ultralytics下载: {base_model_path}")
-                    model = YOLO(base_model_path)
 
-            # 查找数据集配置文件
-            data_yaml = None
-            for root, dirs, files in os.walk(dataset_dir):
-                for file in files:
-                    if file == 'data.yaml' or file == 'dataset.yaml':
-                        data_yaml = os.path.join(root, file)
-                        break
-                if data_yaml:
-                    break
+def _revoke_training(celery_task_id):
+    """把还在队列里的训练任务撤下来；返回是否撤到
 
-            if not data_yaml:
-                task.status = 'failed'
-                task.error_message = '未找到数据集配置文件 (data.yaml)'
-                custom_model.status = 'failed'
-                db.session.commit()
-                return
+    只对**尚未被 worker 取走**的任务有效。已经在跑的任务在 solo 池下无法
+    强制中断（solo 不实现 terminate_job），那种情况由 set_training_stop 的
+    协作式标志兜底。两者是互补的，不是二选一。
+    """
+    if not celery_task_id:
+        return False
+    try:
+        from tasks.celery_app import celery_app
+        celery_app.control.revoke(celery_task_id, terminate=False)
+        logger.info('已撤销排队中的训练任务: %s', celery_task_id)
+        return True
+    except Exception as e:
+        # revoke 走的是 broker：Redis 不可用时这里会失败。
+        # 此时训练任务本来就跑不起来，记一条日志即可，不必让停止接口报错
+        logger.warning('撤销排队中的训练任务失败(%s): %s', celery_task_id, e)
+        return False
 
-            # 开始训练
-            task.status = 'running'
-            task.progress = 0
-            task.current_epoch = 0
-            db.session.commit()
-            
-            print(f"\n{'='*80}")
-            print(f"开始训练模型: {custom_model.name}")
-            print(f"任务ID: {task.id}")
-            print(f"基础模型: {base_model_path}")
-            print(f"数据集: {data_yaml}")
-            print(f"训练配置: epochs={epochs}, batch={batch_size}, img_size={img_size}")
-            print(f"使用最佳超参数: {use_best_hyperparams}")
-            print(f"{'='*80}\n")
-
-            # 1. 动态准备核心参数
-            train_args = {
-                'data': data_yaml,
-                'epochs': epochs,
-                'batch': batch_size,
-                'imgsz': img_size,
-                'project': os.path.join(UPLOADS, 'training_runs'),
-                'name': custom_model.model_key,
-                'exist_ok': True,
-                'pretrained': True,
-                'amp': True,
-                'device': 0 if torch.cuda.is_available() else 'cpu',
-                'verbose': False,
-                'plots': True,
-                'save': True,
-                'workers': 4, 
-                'optimizer':'SGD'      
-            }
-
-            # 2. 优化超参数加载逻辑 (使用 update 批量覆盖)
-            if use_best_hyperparams:
-                best_hp_path = os.path.join(BASE_DIR, 'runs', 'best_hyperparams.json')
-                if os.path.exists(best_hp_path):
-                    try:
-                        with open(best_hp_path, 'r') as f:
-                            best_hp = json.load(f)
-                        train_args.update(best_hp)  # 批量覆盖比 if 判断更简洁
-                        print(f"✓ 成功合并最佳超参数")
-                    except Exception as e:
-                        print(f"⚠️ 超参数解析失败: {e}")
-            
-            # 创建训练回调类来更新进度和检查停止标志 - 优化版本
-            class TrainingCallback:
-                def __init__(self, task_id, total_epochs, app_instance):
-                    self.task_id = task_id
-                    self.total_epochs = total_epochs
-                    self.last_update = 0
-                    self.app = app_instance
-                    self.update_interval = 5  # 每5秒更新一次数据库
-                    self.epochs_since_update = 0
-                    self.epoch_update_interval = max(1, total_epochs // 20)  # 每5%更新一次
-
-                def on_train_epoch_end(self, trainer):
-                    try:
-                        if training_stop_flags.get(self.task_id, False):
-                            print(f"检测到停止标志，正在终止训练任务 {self.task_id}...")
-                            trainer.stop = True
-                            return
-
-                        current_epoch = trainer.epoch + 1
-                        progress = (current_epoch / self.total_epochs) * 100
-                        self.epochs_since_update += 1
-
-                        current_time = time.time()
-                        should_update_db = (
-                            current_time - self.last_update >= self.update_interval or
-                            self.epochs_since_update >= self.epoch_update_interval or
-                            current_epoch == self.total_epochs or
-                            current_epoch == 1
-                        )
-
-                        if should_update_db:
-                            self.last_update = current_time
-                            self.epochs_since_update = 0
-
-                            loss = trainer.loss if hasattr(trainer, 'loss') else None
-
-                            # 使用新会话避免会话过期问题
-                            with current_app.app_context():
-                                task = db.session.get(TrainingTask, self.task_id)
-                                if task and task.status == 'running':
-                                    task.current_epoch = current_epoch
-                                    task.progress = progress
-                                    if loss is not None:
-                                        if isinstance(loss, (int, float)):
-                                            task.loss = float(loss)
-                                        elif hasattr(loss, 'item'):
-                                            task.loss = float(loss.item())
-                                    db.session.commit()
-
-                        # 每轮都打印日志（不操作数据库）
-                        if current_epoch % max(1, self.total_epochs // 10) == 0 or current_epoch <= 3:
-                            loss_val = trainer.loss.item() if hasattr(trainer.loss, 'item') else trainer.loss if trainer.loss is not None else 'N/A'
-                            print(f"[Epoch {current_epoch}/{self.total_epochs}] 进度: {progress:.1f}%, 损失: {loss_val if isinstance(loss_val, str) else f'{loss_val:.4f}'}")
-
-                    except Exception as e:
-                        print(f"更新训练进度失败: {e}")
-            
-            callback = TrainingCallback(task_id, epochs, app)
-            model.add_callback('on_train_epoch_end', callback.on_train_epoch_end)
-            
-            print(f"✓ 训练参数: {train_args}")
-            results = model.train(**train_args)
-            
-            # 重新获取对象（避免会话过期）
-            task = db.session.get(TrainingTask, task_id)
-            custom_model = db.session.get(CustomModel, model_id)
-            
-            # 获取最佳模型路径
-            best_model_path = os.path.join(
-                UPLOADS, 'training_runs', custom_model.model_key, 'weights', 'best.pt'
-            )
-            
-            if os.path.exists(best_model_path):
-                # 复制到模型目录
-                import shutil
-                shutil.copy(best_model_path, custom_model.model_path)
-                
-                # 更新模型状态
-                custom_model.status = 'trained'
-                
-                # 3. 增强指标提取逻辑 (增加对不同版本返回值的兼容)
-                def extract_metrics(results, model_obj):
-                    # 优先尝试 results.results_dict (v8/v11 常用)
-                    rd = getattr(results, 'results_dict', {})
-                    # 定义映射关系：模型字段 -> 可能的键名列表
-                    mapping = {
-                        'map50': ['metrics/mAP50(B)', 'mAP50'],
-                        'map50_95': ['metrics/mAP50-95(B)', 'metrics/mAP50:0.95', 'mAP50-95'],
-                        'precision': ['metrics/precision(B)', 'precision'],
-                        'recall': ['metrics/recall(B)', 'recall']
-                    }
-                    for field, keys in mapping.items():
-                        val = 0
-                        for k in keys:
-                            if k in rd:
-                                val = rd[k]
-                                break
-                        # 如果 dict 没找到，尝试从属性对象获取 (results.box)
-                        if val == 0 and hasattr(results, 'box'):
-                            box = results.box
-                            attr_map = {'map50': 'map50', 'map50_95': 'map', 'precision': 'mp', 'recall': 'mr'}
-                            val = getattr(box, attr_map[field], 0)
-                        setattr(model_obj, field, float(val))
-                    # 计算 F1 和 Accuracy
-                    if model_obj.precision + model_obj.recall > 0:
-                        model_obj.f1_score = 2 * (model_obj.precision * model_obj.recall) / (model_obj.precision + model_obj.recall)
-                    else:
-                        model_obj.f1_score = 0
-                    # 骨折检测通常更看重 mAP50 和 Recall (防止漏检)
-                    model_obj.accuracy = (model_obj.map50 * 0.4 + model_obj.map50_95 * 0.3 + model_obj.f1_score * 0.3)
-
-                extract_metrics(results, custom_model)
-                print(f"✓ 训练指标 - mAP50: {custom_model.map50:.4f}, mAP50-95: {custom_model.map50_95:.4f}")
-                print(f"✓ 检测指标 - Precision: {custom_model.precision:.4f}, Recall: {custom_model.recall:.4f}, F1: {custom_model.f1_score:.4f}")
-                print(f"✓ 综合评分: {custom_model.accuracy:.4f}")
-
-                # 加载新模型到内存
-                models[custom_model.model_key] = YOLO(custom_model.model_path)
-            else:
-                custom_model.status = 'failed'
-                task.error_message = '训练完成但未找到模型文件'
-            
-            # 更新任务状态
-            task.status = 'completed'
-            task.progress = 100.0
-            task.current_epoch = epochs
-            task.completed_at = datetime.utcnow()
-            db.session.commit()
-            
-            print(f"\n{'='*80}")
-            print(f"✅ 模型训练完成!")
-            print(f"模型名称: {custom_model.name}")
-            print(f"训练轮数: {epochs}")
-            print(f"性能指标:")
-            print(f"  mAP@0.5: {custom_model.map50:.4f}")
-            print(f"  mAP@0.5:0.95: {custom_model.map50_95:.4f}")
-            print(f"  精确率: {custom_model.precision:.4f}")
-            print(f"  召回率: {custom_model.recall:.4f}")
-            print(f"  F1-Score: {custom_model.f1_score:.4f}")
-            print(f"  综合评分: {custom_model.accuracy:.4f}")
-            print(f"模型保存路径: {custom_model.model_path}")
-            print(f"{'='*80}\n")
-            
-            log_operation(f"模型训练完成:{custom_model.name},mAP50:{custom_model.map50}")
-            
-        except Exception as e:
-            print(f"\n{'='*80}")
-            print(f"❌ 模型训练失败!")
-            print(f"错误信息: {e}")
-            print(f"详细错误:")
-            import traceback
-            traceback.print_exc()
-            print(f"{'='*80}\n")
-            
-            task = db.session.get(TrainingTask, task_id)
-            custom_model = db.session.get(CustomModel, model_id)
-            
-            if task:
-                task.status = 'failed'
-                task.error_message = str(e)
-            
-            if custom_model:
-                custom_model.status = 'failed'
-            
-            db.session.commit()
-        
-        finally:
-            # 恢复标准输出并关闭日志文件
-            if logger:
-                sys.stdout = logger.terminal
-                logger.close()
