@@ -45,6 +45,20 @@ class Config:
     )
     SQLALCHEMY_TRACK_MODIFICATIONS = False
 
+    # 连接池健壮性。
+    #
+    # pool_pre_ping：取用池中连接前先发一次极轻量的探活，连接已死就丢弃重连。
+    #   不加它的后果是**服务端重启后第一批请求会失败** —— 池里握的全是死连接，
+    #   要等它们被逐个淘汰才恢复。本机的 PostgreSQL 今天崩过两次（0xC0000142，
+    #   事件日志提示可能是杀毒软件注入 DLL 所致，与代码无关），每次都会踩到。
+    #   代价是每个请求多一次往返，同机部署可以忽略。
+    # pool_recycle：连接最长存活 30 分钟就回收，避免踩到服务端或中间设备的
+    #   空闲超时（故障表现同样是"用着用着突然报错"）。
+    SQLALCHEMY_ENGINE_OPTIONS = {
+        'pool_pre_ping': True,
+        'pool_recycle': 1800,
+    }
+
     # ---------- JWT ----------
     JWT_SECRET_KEY = _env('JWT_SECRET_KEY', SECRET_KEY)
     JWT_ACCESS_TOKEN_EXPIRES = int(_env('JWT_EXPIRES_SECONDS', 60 * 60 * 24 * 7))  # 7 天

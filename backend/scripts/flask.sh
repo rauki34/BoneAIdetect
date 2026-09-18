@@ -82,12 +82,17 @@ case "${1:-}" in
       exit 1
     fi
 
-    # 验证脚本要从日志里读验证码明文，且自身连续登录不能被限流拦下
+    # 验证脚本要从日志里读验证码明文，且自身的高频调用不能被限流拦下
+    # （知识库上传默认只有 10 次/5 分钟，连续跑几轮套件就会撞上 429）
     if [ "${2:-}" = "debug" ]; then
       export LOG_LEVEL=DEBUG
       export RATE_LIMIT_LOGIN=100
       export RATE_LIMIT_REGISTER=100
       export RATE_LIMIT_CAPTCHA=100
+      export RATE_LIMIT_KB_UPLOAD=500
+      export RATE_LIMIT_KB_SEARCH=1000
+      export RATE_LIMIT_AI=1000
+      export RATE_LIMIT_GENERAL=10000
       echo "（debug 模式：LOG_LEVEL=DEBUG，限流已放宽）"
     fi
 

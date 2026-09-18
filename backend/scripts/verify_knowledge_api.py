@@ -289,11 +289,14 @@ def main():
             final = wait_doc_status(scanned_doc_id, 'failed', timeout=180)
             check('该扫描件最终被置为失败（而非静默空入库）',
                   final is not None, f'最终状态 = {final}')
-            if final == 'failed':
-                reason = doc_error_msg(scanned_doc_id)
-                check('失败原因写明「无文本层」', '无文本层' in (reason or ''),
-                      f'error_msg = {(reason or "")[:60]}')
-                print(f"      错误文案: {(reason or '')[:70]}")
+            # 注意：这两条 check 都必须**无条件**产生，不能塞进 if final == 'failed' 里。
+            # 否则终态不是 failed 时它会整条消失，用例总数跟着变，报告看起来像
+            # "少测了一项"而不是"这一项没过"——验证脚本最不该有这种歧义。
+            reason = doc_error_msg(scanned_doc_id)
+            check('失败原因写明「无文本层」', '无文本层' in (reason or ''),
+                  f'error_msg = {(reason or "")[:60]}')
+            if reason:
+                print(f"      错误文案: {reason[:70]}")
         else:
             check('该扫描件最终被置为失败（而非静默空入库）', False, '未拿到 doc_id')
             check('失败原因写明「无文本层」', False, '未拿到 doc_id')
