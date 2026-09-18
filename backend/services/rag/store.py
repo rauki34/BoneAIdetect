@@ -161,11 +161,19 @@ def recover_stale_docs():
 
 # ---------- 语料版本戳（缓存失效依据） ----------
 
+CORPUS_VER_KEY = 'rag:corpus_version'
+CORPUS_VER_TTL = 60
+
+# Redis 不可用时的进程内节流（降级，与 core/cache.py 的口径一致）
+_local_ver = None
+_local_ver_at = 0.0
+
+
 def corpus_version():
     """切片集合的版本戳：任何入库都会改变它
 
-    用于 RAG 缓存键。基于 count/max(id)/max(updated_at) 的 sha1，
-    代价是三条聚合查询，因此调用方需自行做 60 秒节流。
+    用于 RAG 缓存键。基于 count/max(id) 的 sha1，代价是一次聚合查询，
+    因此调用方需自行节流 —— 见 cached_corpus_version()。
     """
     import hashlib
 
@@ -180,8 +188,63 @@ def corpus_version():
     return hashlib.sha1(f'{count}|{max_id}'.encode()).hexdigest()[:16]
 
 
+def cached_corpus_version():
+    """带节流的语料版本戳 —— 检索侧应该用这个
+
+    **节流状态放在 Redis 而不是进程内**，这是阶段 8 把入库搬去 Celery 后的
+    必需项。worker 与 API 是两个进程：worker 入库完成后，API 进程若只在本地
+    缓存版本戳，最多 60 秒仍会用旧版本算缓存键。症状是「刚上传的文档搜不到」，
+    60 秒后自愈 —— 无法复现，极难排查。
+
+    放进 Redis 后，worker 侧的 invalidate_cache() 删掉这个键，
+    所有进程的下一次调用都会重新计算，立刻看到新语料。
+    """
+    global _local_ver, _local_ver_at
+
+    from core.cache import get_redis
+
+    client = get_redis()
+    if client is not None:
+        try:
+            cached = client.get(CORPUS_VER_KEY)
+            if cached:
+                return cached if isinstance(cached, str) else cached.decode()
+            ver = corpus_version()
+            client.setex(CORPUS_VER_KEY, CORPUS_VER_TTL, ver)
+            return ver
+        except Exception as e:
+            logger.warning('语料版本戳读写 Redis 失败，退回进程内节流: %s', e)
+
+    # 降级：Redis 不可用时退回进程内节流（多进程下会各自算各自的，
+    # 但此时 broker 也不可用，不存在"worker 改了而 API 不知道"的场景）
+    import time
+    now = time.time()
+    if _local_ver and now - _local_ver_at < CORPUS_VER_TTL:
+        return _local_ver
+    _local_ver = corpus_version()
+    _local_ver_at = now
+    return _local_ver
+
+
 def invalidate_cache():
-    """入库成功后主动清掉检索缓存（见 services/rag/retriever.py）"""
+    """入库成功后主动清掉检索缓存（见 services/rag/retriever.py）
+
+    这个函数现在**由 worker 进程调用**（阶段 8 起入库在 Celery 里跑），
+    而它要影响的是 API 进程的检索结果。所以清的是 Redis 里的共享状态，
+    不是本进程的内存 —— 后者清了也没用。
+    """
+    # 先删版本戳：它是 Redis 缓存键的组成部分（见 retriever._cache_key），
+    # 删掉后所有进程的下一跳都会重算，拿到新语料。
+    # 注：下面 clear_caches() 的 `rag:*` 扫描其实也会删到它，
+    # 但这里显式删一次，免得哪天有人把那个扫描范围收窄了而无声退化。
+    try:
+        from core.cache import get_redis
+        client = get_redis()
+        if client is not None:
+            client.delete(CORPUS_VER_KEY)
+    except Exception as e:
+        logger.warning('清理语料版本戳失败: %s', e)
+
     try:
         from services.rag.retriever import clear_caches
     except ImportError:

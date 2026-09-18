@@ -21,8 +21,8 @@ from services.rag.embedder import Embedder
 from services.rag.reranker import Reranker
 from utils.logger import logger
 
-# 语料版本戳的节流：最多每 60 秒算一次，避免每个请求三条聚合查询
-_CORPUS_VER_TTL = 60
+# 语料版本戳的节流已移至 services/rag/store.py（阶段 8：状态放 Redis，
+# 否则 worker 入库后本进程最多 60 秒看不到新语料）。见 cached_corpus_version()。
 _retrieve_failure_until = 0.0
 _FAILURE_COOLDOWN = 30
 
@@ -192,19 +192,19 @@ class HybridRetriever:
     def __init__(self, embedder=None, reranker=None):
         self.embedder = embedder or Embedder.instance()
         self.reranker = reranker or Reranker.instance()
-        self._corpus_ver = None
-        self._corpus_ver_at = 0.0
 
     # ---------- 语料版本 ----------
 
     def corpus_version(self):
-        now = time.time()
-        if self._corpus_ver and now - self._corpus_ver_at < _CORPUS_VER_TTL:
-            return self._corpus_ver
+        """语料版本戳（带节流）
+
+        节流状态在 **Redis 里而不是本进程内**：阶段 8 起入库由 Celery worker
+        执行，worker 写进新切片后，API 进程必须立刻看到新版本，否则会出现
+        "刚上传的文档搜不到、60 秒后自愈"这种无法复现的问题。
+        实现见 store.cached_corpus_version()。
+        """
         from services.rag import store
-        self._corpus_ver = store.corpus_version()
-        self._corpus_ver_at = now
-        return self._corpus_ver
+        return store.cached_corpus_version()
 
     # ---------- 缓存的底层读写 ----------
 
