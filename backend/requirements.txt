@@ -12,7 +12,17 @@ Werkzeug==3.1.4
 flask-sock==0.7.0
 
 # ==================== Cache / Queue ====================
-redis==8.1.0
+# redis-py 必须 <6.5：kombu 5.6.2（Celery 的 broker 层）把上界钉死在 <6.5，
+# 写成 8.x 会让 `pip install -r` 直接解析失败。
+#
+# 附带的好处：6.4.0 的 DEFAULT_RESP_VERSION = 2，而 8.x 起默认 3。
+# 本机 Redis 5.0.14.1 不支持 RESP3 的 HELLO 命令，8.x 会连不上——
+# 降到这里反而省掉了 core/cache.py 里 protocol=2 这个绕法（虽然那行仍保留，
+# 它在两个版本下都合法）。
+redis==6.4.0
+
+# 消息队列：训练与知识库入库两类长耗时任务
+celery==5.6.3
 
 # ==================== Database ====================
 SQLAlchemy==2.0.45
