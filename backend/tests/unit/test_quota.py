@@ -138,10 +138,12 @@ def test_empty_session_is_not_counted(fake_user):
 def test_denial_response_shape():
     """超限用 429 + 独立错误码：'用完了' 与 RATE_LIMIT_EXCEEDED 的 '太快了'
     语义不同，前端提示与自动测试的判据都该分开"""
-    from core.bootstrap import build_bare_app, enable_utf8_console, load_env
-    load_env()
-    enable_utf8_console()
-    app, _ = build_bare_app()
+    # 纯响应形状断言，**不建库**：本函数唯一碰数据库的地方是 log_operation，
+    # 而它整体包在 try/except 里（core/helpers.py），写库失败只记日志。
+    # 此前这里用 build_bare_app()，在 CI 上会连带撞上「没有 .env → config 回退
+    # SQLite → instance/ 目录不存在 → unable to open database file」。
+    from flask import Flask
+    app = Flask(__name__)
     with app.app_context():
         resp = quota.denial_response(
             quota.QuotaResult(False, 'daily', daily_used=100, retry_after=3600))
@@ -158,11 +160,9 @@ def test_denial_response_shape():
 
 
 def test_attach_headers():
-    from flask import jsonify
-    from core.bootstrap import build_bare_app, enable_utf8_console, load_env
-    load_env()
-    enable_utf8_console()
-    app, _ = build_bare_app()
+    # 同上：只验 header 拼装，不需要数据库
+    from flask import Flask, jsonify
+    app = Flask(__name__)
     QUOTA_CONFIG['session_max'] = 30
     QUOTA_CONFIG['daily_max'] = 100
     with app.app_context():
