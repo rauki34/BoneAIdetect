@@ -98,6 +98,34 @@
                 </div>
               </div>
               <div class="message-content">
+                <!-- Agent 执行轨迹：让"模型自己决定了查什么"这件事可见。
+                     放在回答上方，因为用户关心的是结论怎么来的 -->
+                <div
+                  v-if="msg.role === 'assistant' && msg.trace?.length"
+                  class="agent-trace"
+                >
+                  <div
+                    class="agent-trace-head"
+                    @click="toggleTrace(index)"
+                  >
+                    <el-icon size="12"><Compass /></el-icon>
+                    <span>分析过程（{{ msg.trace.filter(t => t.type === 'tool_result').length }} 步工具调用）</span>
+                    <span class="agent-trace-toggle">{{ expandedTraces.has(index) ? '收起' : '展开' }}</span>
+                  </div>
+                  <div v-show="expandedTraces.has(index)" class="agent-trace-body">
+                    <div
+                      v-for="step in msg.trace"
+                      :key="step.step"
+                      :class="['agent-step', `is-${stepTone(step)}`]"
+                    >
+                      <span class="agent-step-dot"></span>
+                      <span class="agent-step-text">{{ stepText(step) }}</span>
+                      <span v-if="step.elapsed_ms >= 500" class="agent-step-time">
+                        {{ (step.elapsed_ms / 1000).toFixed(1) }}s
+                      </span>
+                    </div>
+                  </div>
+                </div>
                 <div class="message-bubble">
                   <div v-if="msg.role === 'assistant' && msg.isStreaming" class="streaming-text">
                     <span v-for="(char, i) in msg.content" :key="i" :style="{ animationDelay: `${i * 0.03}s` }">{{ char }}</span>
@@ -159,8 +187,14 @@
               ></textarea>
             </div>
             <div class="input-toolbar">
+              <label class="agent-toggle" :title="'开启后 AI 会自行查阅你的病历、检测报告与指南，多步分析后作答（较慢）'">
+                <input v-model="agentMode" type="checkbox" :disabled="isLoading" />
+                <span>深度分析</span>
+              </label>
+              <span v-if="agentMode" class="agent-toggle-hint">多步分析约需 30-90 秒</span>
               <span class="input-hint">
                 <el-icon size="12"><InfoFilled /></el-icon>
+                <template v-if="quotaDaily !== null">今日剩余 {{ quotaDaily }} 次 · </template>
                 按 Enter 发送
               </span>
               <button
@@ -231,7 +265,8 @@ import {
   Food,
   QuestionFilled,
   TrendCharts,
-  ArrowRight
+  ArrowRight,
+  Compass
 } from '@element-plus/icons-vue'
 import axios from '../utils/axios'
 import CitationList from './CitationList.vue'
@@ -245,6 +280,13 @@ const messages = ref([])
 const messagesContainer = ref(null)
 const unreadCount = ref(0)
 const sessionId = ref('')
+// 深度分析（Agent）：开启后走 /api/agent/chat，AI 自行决定查阅哪些资料。
+// 默认关闭 —— 它比普通问答慢得多（多轮 LLM 调用），不该是默认体验。
+const agentMode = ref(false)
+// 展开的轨迹（按消息下标记录，避免给每条消息都塞一个展开态字段）
+const expandedTraces = ref(new Set())
+// 额度：优先读响应头（后端在成功响应里给），拿不到就不显示
+const quotaDaily = ref(null)
 
 // 常量定义
 const STORAGE_KEYS = {
@@ -351,6 +393,8 @@ const loadChatHistory = async () => {
         content: msg.content,
         // 引用随历史一起返回，刷新页面后引用卡片仍在
         references: msg.references || [],
+        // 深度分析的执行轨迹也要能恢复，否则刷新后"分析过程"就没了
+        trace: msg.agent_trace || [],
         timestamp: new Date(msg.timestamp)
       }))
       nextTick(() => scrollToBottom())
@@ -382,29 +426,46 @@ const sendMessage = async () => {
     // 一次回答实测需 30-45s（检索约 2s + 模型生成 30-45s），
     // 用默认值会在服务端已经成功返回 200 的情况下由浏览器先中断，
     // 用户看到的是"服务暂时不可用"，日志里却是一条成功的请求。
-    const response = await axios.post('/api/ai-assistant/chat', {
-      session_id: sessionId.value,
-      message: message
-    }, {
-      timeout: 180000
-    })
-    
+    // 深度分析更慢（多轮工具调用，实测 2 轮约 37-90s），所以再放宽一档。
+    const useAgent = agentMode.value
+    const response = useAgent
+      ? await axios.post('/api/agent/chat', {
+          session_id: sessionId.value,
+          message: message
+        }, { timeout: 300000 })
+      : await axios.post('/api/ai-assistant/chat', {
+          session_id: sessionId.value,
+          message: message
+        }, { timeout: 180000 })
+
+    readQuota(response)
+
     if (response.data.success) {
-      // 添加AI回复（含引用溯源）
+      // 添加AI回复（含引用溯源；深度分析另有执行轨迹）
       messages.value.push({
         role: 'assistant',
-        content: response.data.reply,
+        content: useAgent ? response.data.answer : response.data.reply,
         references: response.data.references || [],
+        trace: useAgent ? (response.data.trace || []) : [],
         timestamp: new Date()
       })
+      if (useAgent && response.data.trace?.length) {
+        expandedTraces.value.add(messages.value.length - 1)
+      }
+      if (useAgent && response.data.degraded) {
+        // 编排降级了（总开关关闭 / provider 不支持工具 / 模型失败后回退）——
+        // 如实告知，否则用户以为得到的是多步分析的结论
+        ElMessage.warning('本次未能完成多步分析，已按普通问答回答')
+      }
     } else {
       throw new Error(response.data.error || 'AI服务响应失败')
     }
   } catch (error) {
     console.error('发送消息失败:', error)
     let errorMsg = '抱歉，服务暂时不可用，请稍后再试'
-    if (error.response?.data?.error) {
-      errorMsg = error.response.data.error
+    const data = error.response?.data
+    if (data?.error) {
+      errorMsg = quotaHint(data) || data.error
     }
     messages.value.push({
       role: 'assistant',
@@ -415,6 +476,71 @@ const sendMessage = async () => {
     isLoading.value = false
     nextTick(() => scrollToBottom())
   }
+}
+
+// 额度响应头 → 界面显示（后端只在成功响应里给，拿不到就保持上一次的值）
+const readQuota = (response) => {
+  const left = response.headers?.['x-quota-daily-remaining']
+  if (left !== undefined && left !== null && left !== '') {
+    quotaDaily.value = Number(left)
+  }
+}
+
+// 额度用尽的提示与"请求过于频繁"语义不同，该分开说：
+// 一个是"用完了"（新建会话 / 明日重置），一个是"太快了"（等一会）
+const quotaHint = (data) => {
+  // QUOTA_001 的文案后端已经写清楚了（"本次会话已达上限（30 次），新建会话可继续"），
+  // 直接用它，别再拼一遍
+  if (data.error_code === 'QUOTA_001') return data.error
+  if (data.error_code === 'QUOTA_002') {
+    const hours = data.retry_after
+      ? Math.max(1, Math.round(data.retry_after / 3600))
+      : null
+    return `今日对话额度已用完${hours ? `，约 ${hours} 小时后（本地 00:00）重置` : '，明日 00:00 重置'}。`
+  }
+  return ''   // 其他错误（含 RATE_LIMIT_EXCEEDED）走原有文案
+}
+
+// 轨迹文案：工具名 → 用户看得懂的说法（后端返回的是给模型看的英文名）
+const TOOL_LABELS = {
+  search_guideline: '检索诊疗指南',
+  query_medical_records: '查阅我的病历',
+  get_patient_profile: '查阅我的健康档案',
+  list_detection_reports: '查阅我的检测报告',
+  get_followup_schedule: '查阅复诊安排'
+}
+
+const stepTone = (step) => {
+  if (step.type === 'error' || step.status === 'llm_error') return 'error'
+  if (step.type === 'guard') return 'warn'
+  if (step.type === 'tool_result') {
+    if (step.status === 'ok') return 'ok'
+    if (step.status === 'permission_denied') return 'error'
+    if (step.status === 'not_found' || step.status === 'unsupported') return 'warn'
+    return 'warn'
+  }
+  return 'info'
+}
+
+const stepText = (step) => {
+  if (step.type === 'tool_result') {
+    const label = TOOL_LABELS[step.name] || step.name
+    return `${label}：${step.summary}`
+  }
+  const head = {
+    planner: '理解问题并决定下一步',
+    guard: '到达上限，收尾',
+    answer: '生成最终结论',
+    error: '出错了'
+  }[step.type] || step.type
+  return step.summary ? `${head} —— ${step.summary}` : head
+}
+
+const toggleTrace = (index) => {
+  const next = new Set(expandedTraces.value)
+  if (next.has(index)) next.delete(index)
+  else next.add(index)
+  expandedTraces.value = next
 }
 
 // 发送快捷问题
@@ -1184,6 +1310,92 @@ html.dark .citation-detail-snippet {
   gap: 6px;
   font-size: 12px;
   color: #94a3b8;
+}
+
+/* 深度分析开关：默认关闭，开启后走 Agent 端点（多轮工具调用，慢但更全面） */
+.agent-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: #0d9488;
+  cursor: pointer;
+  user-select: none;
+}
+
+.agent-toggle input {
+  width: 13px;
+  height: 13px;
+  accent-color: #0d9488;
+  cursor: pointer;
+}
+
+.agent-toggle-hint {
+  font-size: 11px;
+  color: #94a3b8;
+}
+
+/* Agent 执行轨迹 */
+.agent-trace {
+  margin-bottom: 6px;
+  border: 1px solid #99f6e4;
+  border-radius: 8px;
+  background: #f0fdfa;
+  overflow: hidden;
+}
+
+.agent-trace-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: #0d9488;
+  cursor: pointer;
+}
+
+.agent-trace-toggle {
+  margin-left: auto;
+  color: #64748b;
+}
+
+.agent-trace-body {
+  padding: 2px 10px 8px;
+  border-top: 1px dashed #99f6e4;
+}
+
+.agent-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 3px 0;
+  font-size: 12px;
+  color: #334155;
+  line-height: 1.5;
+}
+
+.agent-step-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  margin-top: 6px;
+  border-radius: 50%;
+  background: #94a3b8;
+}
+
+.agent-step.is-ok .agent-step-dot { background: #10b981; }
+.agent-step.is-warn .agent-step-dot { background: #f59e0b; }
+.agent-step.is-error .agent-step-dot { background: #ef4444; }
+.agent-step.is-info .agent-step-dot { background: #0d9488; }
+
+.agent-step-text {
+  flex: 1;
+}
+
+.agent-step-time {
+  flex: none;
+  color: #94a3b8;
+  font-variant-numeric: tabular-nums;
 }
 
 .send-btn {

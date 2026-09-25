@@ -527,6 +527,11 @@ def part_orchestrator(app):
               bool(client.calls[1]['kwargs'].get('tools')))
 
         section('[A.13] 护栏：迭代上限 / 工具上限 / 时间预算')
+        # 预热：首次 count_tokens 要加载 tokenizer（约 2-5s），首次检索要加载
+        # 嵌入/重排模型。把这份一次性开销算进"护栏是否及时收手"的计时里会误判 ——
+        # 实测就撞过一次（6.90s vs 阈值 5s）。
+        from services.rag.tokens import count_tokens
+        count_tokens('预热')
         app_config.AGENT_MAX_ITERATIONS = 2
         guard = ScriptedClient([_reply_tools(_tool_call('search_guideline',
                                                         {'query': 'x'}, 'g1'))],
@@ -537,7 +542,9 @@ def part_orchestrator(app):
         check('永远返回 tool_calls 的模型被迭代上限截断（没有护栏会挂死）',
               state.stopped_reason == 'max_iters', state.stopped_reason)
         check('迭代次数恰为上限值', state.iterations == 2, f'{state.iterations}')
-        check('被截断时仍在 5 秒内返回', cost < 5, f'{cost:.2f}s')
+        # 阈值宽松（15s）：这一段的目的是"不挂死"（无护栏会一直循环到超时预算
+        # 150s），而它内部含一次真实检索，冷缓存时本身就要数秒
+        check('被截断时及时返回而不是挂死', cost < 15, f'{cost:.2f}s')
         check('trace 里有 guard 记录说明原因',
               any(t['type'] == 'guard' and t['status'] == 'max_iters'
                   for t in state.trace))
