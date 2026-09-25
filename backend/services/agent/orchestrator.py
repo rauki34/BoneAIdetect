@@ -55,6 +55,7 @@ class AgentState:
     trace: list = field(default_factory=list)
     references: list = field(default_factory=list)
     answer: str = ''
+    memory: dict = field(default_factory=dict)   # 本轮的记忆压缩结果（可观测）
     stopped_reason: str = ''      # answered|max_iters|tool_budget|time_budget|llm_error|degraded
     degraded: bool = False
     degraded_reason: str = ''
@@ -82,13 +83,18 @@ class AgentState:
 
 # ==================== 历史 ====================
 
-def load_history(user_id, session_id, *, exclude_id=None, limit=HISTORY_LIMIT):
-    """读最近若干轮对话（不含 system）
+def load_history(user_id, session_id, *, exclude_id=None, limit=None):
+    """读最近若干条对话（不含 system）
 
     `exclude_id` 用于排除**本次刚落库的那条提问** —— 视图层为了"流式中断也不
     丢提问"会先把用户消息落库，若不排除，问题会在 messages 里出现两次，
     既浪费 token 又会让模型以为用户问了两遍。
+
+    条数上限取 AGENT_HISTORY_LIMIT（默认 40，比普通对话的 10 大）：记忆压缩
+    需要足够长的窗口才有意义 —— 只读 10 条的话，减去"必须保留的最近 6 条"，
+    可压缩的余地只有 4 条，预算根本用不上。
     """
+    limit = limit or _cfg('AGENT_HISTORY_LIMIT', 40)
     query = AIConversation.query.filter_by(patient_id=user_id, session_id=session_id)
     if exclude_id is not None:
         query = query.filter(AIConversation.id != exclude_id)
@@ -99,8 +105,14 @@ def load_history(user_id, session_id, *, exclude_id=None, limit=HISTORY_LIMIT):
         if not h.message_content:
             continue
         role = 'user' if h.message_type == 'user' else 'assistant'
-        messages.append({'role': role, 'content': h.message_content})
+        # _id 只给记忆压缩算水位线用，拼 messages 前会被 _public() 剥掉
+        messages.append({'role': role, 'content': h.message_content, '_id': h.id})
     return messages
+
+
+def _public(message):
+    """剥掉私有键（provider 只该看到 role/content[/tool_calls]）"""
+    return {k: v for k, v in message.items() if not k.startswith('_')}
 
 
 # ==================== 消息拼装 ====================
@@ -325,8 +337,23 @@ def run(question, *, session_id, principal, patient_id=None, client=None,
     limit = _cfg('AGENT_MAX_QUESTION_CHARS', 2000)
     if len(question) > limit:
         question = question[:limit]
-    state.messages = ([{'role': 'system', 'content': AGENT_SYSTEM_PROMPT}]
-                      + list(history)
+
+    # 三层记忆压缩：超预算时把较早的对话压成摘要/要点（Redis 跨进程）。
+    # 压缩失败只记录、不抛 —— 记忆是增强能力，坏掉不该让对话不可用。
+    from services.agent import memory
+    system_message = {'role': 'system', 'content': AGENT_SYSTEM_PROMPT}
+    from services.rag.tokens import count_tokens
+    reserved = count_tokens(AGENT_SYSTEM_PROMPT) + 8
+    history, mem_info = memory.compact(
+        history, user_id=principal.id, session_id=session_id,
+        reserved_tokens=reserved,
+        # 把整条编排的墙钟预算传下去：摘要要花一次 LLM 调用，不能把
+        # 规划/收尾的时间吃光（实测无上限时它能吃掉 140 秒）
+        deadline=state.started_at + _cfg('AGENT_TIMEOUT_SECONDS', 150))
+    state.memory = mem_info
+
+    state.messages = ([system_message]
+                      + [_public(m) for m in history]
                       + [{'role': 'user', 'content': question}])
 
     handler = {'planner': planner_node, 'tools': tools_node,

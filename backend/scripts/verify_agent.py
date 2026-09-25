@@ -638,9 +638,193 @@ def part_orchestrator(app):
               f'{len(state.references)} 条')
         check('引用未混进发给模型的消息里',
               all('_references' not in str(m) for m in client.calls[-1]['messages']))
+        check('编排带上了记忆压缩的诊断信息（state.memory）',
+              'reason' in state.memory, str(state.memory)[:80])
+        check('发给模型的消息不含私有键 _id',
+              all(not any(k.startswith('_') for k in m) for m in
+                  client.calls[-1]['messages']))
     finally:
         for key, value in patched.items():
             setattr(app_config, key, value)
+
+
+# ==================== Part A：记忆三层压缩 ====================
+
+def part_memory(app):
+    """三层上下文压缩（注入假摘要器，零 LLM 调用）"""
+    from services.agent import memory
+
+    UID, SID = 990777, 'agent-verify-mem'
+
+    def fake_summarizer(seen):
+        def _sum(texts, level):
+            seen.append({'level': level, 'texts': list(texts)})
+            return f'<{level} 摘要 {len(seen)}：{len(texts)} 段>'
+        return _sum
+
+    def history(n, chars=300):
+        out = []
+        for i in range(n):
+            role = 'user' if i % 2 == 0 else 'assistant'
+            out.append({'role': role, 'content': f'第{i}条 ' + '内容' * chars,
+                        '_id': 1000 + i})
+        return out
+
+    def cleanup():
+        memory.clear(UID, SID)
+
+    section('[A.19] 上下文压缩：触发、水位线、分层')
+    cleanup()
+    seen = []
+    h = history(30)
+    msg, info = memory.compact(h, user_id=UID, session_id=SID, budget=2000,
+                               keep_recent=6, summarizer=fake_summarizer(seen))
+    check('超预算时触发压缩', info['compressed'] and info['reason'] == 'compressed',
+          str(info))
+    check('压缩后 token 明显下降',
+          0 < info['tokens_after'] < info['tokens_before'],
+          f"{info['tokens_before']} → {info['tokens_after']}")
+    check('最近 6 条原文完整保留（不能被摘要吞掉）',
+          [m['content'] for m in msg[-6:]] == [m['content'] for m in h[-6:]])
+    check('被吸收的部分替换成一条摘要消息',
+          any(m.get('role') == 'system' and memory.L2_MARK in m.get('content', '')
+              for m in msg),
+          f'{len(msg)} 条（原 {len(h)} 条）')
+    check('摘要消息里不含私有键 _id 以外的 provider 可见字段异常',
+          all(set(m) <= {'role', 'content', '_id'} for m in msg))
+    check('水位线记为最后一条被吸收消息的 id',
+          memory._load_state(UID, SID).get('l2_upto') == h[info['absorbed'] - 1]['_id'],
+          f"absorbed={info['absorbed']}")
+    check('超出溢出量 1.5 倍后才停手（不是刚好压到预算）',
+          info['tokens_after'] < 2000, f"after={info['tokens_after']}")
+
+    section('[A.20] 水位线：已被摘要覆盖的消息不再重复摘要')
+    seen2 = []
+    prev_upto = memory._load_state(UID, SID)['l2_upto']
+    h2 = history(80)                 # 窗口变长，但里面仍带着已覆盖的旧消息
+    msg2, info2 = memory.compact(h2, user_id=UID, session_id=SID, budget=2000,
+                                 keep_recent=6, summarizer=fake_summarizer(seen2))
+    check('窗口变长后继续压缩', info2['compressed'], str(info2)[:110])
+    check('水位线推进（旧的没有被重新吸收）',
+          memory._load_state(UID, SID)['l2_upto'] > prev_upto,
+          f"{prev_upto} → {memory._load_state(UID, SID)['l2_upto']}")
+    texts = seen2[0]['texts'] if seen2 else []
+    seg_idx = [int(re.search(r'第(\d+)条', t).group(1))
+               for t in texts if not t.startswith('（既有摘要')]
+    check('摘要输入里只有水位线之后的新片段（不重复摘旧的）',
+          bool(seg_idx) and min(seg_idx) + 1000 > prev_upto,
+          f'最小 idx={min(seg_idx) if seg_idx else None}，水位线 id={prev_upto}')
+    check('既有摘要作为前缀并入（历史不丢）',
+          bool(texts) and texts[0].startswith('（既有摘要'),
+          texts[0][:22] if texts else '')
+
+    seen2b = []
+    msg2b, info2b = memory.compact(h2[:24], user_id=UID, session_id=SID,
+                                   budget=2000, keep_recent=6,
+                                   summarizer=fake_summarizer(seen2b))
+    check('窗口内全是已覆盖内容 → 复用摘要、不再花钱调摘要器',
+          info2b['reused_summary'] and not seen2b, str(info2b)[:110])
+
+    section('[A.21] 第三层：中段摘要过长时提升为"早期要点"')
+    cleanup()
+    seen3 = []
+    # L2 上限设得很小，逼出 L3 提升
+    from config import config as app_config
+    original_l2 = app_config.AGENT_L2_MAX_CHARS
+    try:
+        app_config.AGENT_L2_MAX_CHARS = 10
+        memory.compact(history(30), user_id=UID, session_id=SID, budget=1500,
+                       keep_recent=6, summarizer=fake_summarizer(seen3))
+        # 第二次要用足够长的窗口：水位线之后至少得有 MIN_MESSAGES(20) 条，
+        # 否则会以 too_few_messages 提前返回，L3 提升就永远走不到
+        memory.compact(history(80), user_id=UID, session_id=SID, budget=1500,
+                       keep_recent=6, summarizer=fake_summarizer(seen3))
+        levels = [s['level'] for s in seen3]
+        check('出现了 L3（要点化）调用', 'L3' in levels, f'{levels}')
+        state = memory._load_state(UID, SID)
+        check('L3 内容已落库', bool(state.get('l3')), str(state.get('l3'))[:40])
+        check('L3 水位线已推进', bool(state.get('l3_upto')))
+    finally:
+        app_config.AGENT_L2_MAX_CHARS = original_l2
+
+    section('[A.22] 不该压缩的场合')
+    cleanup()
+    seen4 = []
+    msg3, info3 = memory.compact(history(30), user_id=UID, session_id=SID,
+                                 budget=100000, keep_recent=6,
+                                 summarizer=fake_summarizer(seen4))
+    check('未超预算 → 原样返回、不调摘要',
+          not info3['compressed'] and not seen4
+          and [m['content'] for m in msg3] == [m['content'] for m in history(30)],
+          info3['reason'])
+    app_config_copy = app_config.AGENT_SUMMARY_ENABLED
+    try:
+        app_config.AGENT_SUMMARY_ENABLED = False
+        msg4, info4 = memory.compact(history(30), user_id=UID, session_id=SID,
+                                     budget=1000, keep_recent=6,
+                                     summarizer=fake_summarizer(seen4))
+        check('总开关关闭 → 不压缩且不调摘要',
+              not info4['compressed'] and not seen4, info4['reason'])
+    finally:
+        app_config.AGENT_SUMMARY_ENABLED = app_config_copy
+    msg5, info5 = memory.compact(history(5), user_id=UID, session_id=SID,
+                                 budget=10, keep_recent=6,
+                                 summarizer=fake_summarizer(seen4))
+    check('历史条数 ≤ 保留条数 → 不压缩（全是要留的原文）',
+          not info5['compressed'] and info5['reason'] == 'all_recent',
+          info5['reason'])
+
+    section('[A.23] Redis 不可用：跳过压缩，绝不抛异常')
+    import services.agent.memory as mem_mod
+    original = mem_mod._redis
+    try:
+        mem_mod._redis = lambda: None
+        msg6, info6 = memory.compact(history(30), user_id=UID, session_id=SID,
+                                     budget=1000, keep_recent=6,
+                                     summarizer=fake_summarizer([]))
+        check('Redis 不可用 → 原样返回并说明原因（不降级到进程内，避免串话）',
+              not info6['compressed'] and info6['reason'] == 'redis_unavailable',
+              info6['reason'])
+        check('原样返回时消息内容未被破坏',
+              [m['content'] for m in msg6] == [m['content'] for m in history(30)])
+    finally:
+        mem_mod._redis = original
+
+    section('[A.23b] 时间护栏：预算不够就不压')
+    seen_free = []
+    msg_t, info_t = memory.compact(history(30), user_id=UID, session_id=SID,
+                                   budget=1000, keep_recent=6,
+                                   summarizer=fake_summarizer(seen_free),
+                                   deadline=time.monotonic() + 1)
+    check('剩余预算不足以做摘要 → 跳过压缩（摘要不能吃掉编排的时间）',
+          not info_t['compressed'] and info_t['reason'] == 'no_time_for_summary'
+          and not seen_free, info_t['reason'])
+    msg_t2, info_t2 = memory.compact(history(30), user_id=UID, session_id=SID,
+                                     budget=1000, keep_recent=6,
+                                     summarizer=fake_summarizer([]),
+                                     deadline=time.monotonic() + 100000)
+    check('预算充足时正常压缩', info_t2['compressed'], info_t2['reason'])
+
+    section('[A.24] 摘要器失败：不影响对话')
+    cleanup()          # 清掉上一段留下的水位线，否则会以 all_recent 提前返回
+    def boom(texts, level):
+        raise RuntimeError('模拟摘要服务故障')
+    msg7, info7 = memory.compact(history(30), user_id=UID, session_id=SID,
+                                 budget=1000, keep_recent=6, summarizer=boom)
+    check('摘要失败 → 原样返回（记忆是增强能力，坏掉不该让对话不可用）',
+          not info7['compressed'] and info7['reason'] == 'summarize_failed',
+          info7['reason'])
+    check('失败时历史条数不变', len(msg7) == len(history(30)))
+
+    section('[A.25] 会话隔离与清理')
+    cleanup()
+    memory.compact(history(30), user_id=UID, session_id=SID, budget=1000,
+                   keep_recent=6, summarizer=fake_summarizer([]))
+    check('压缩状态写到 Redis（跨进程可读，重启不丢）',
+          bool(memory._load_state(UID, SID)))
+    check('另一个用户读不到（键含 user_id，防串号）',
+          memory._load_state(UID + 1, SID) == {})
+    check('clear 能清掉', memory.clear(UID, SID) and not memory._load_state(UID, SID))
 
 
 # ==================== Part A：端点准入（不花 LLM 调用）====================
@@ -944,6 +1128,13 @@ def main():
             import traceback
             traceback.print_exc()
             check('编排层用例执行', False, f'{type(e).__name__}: {e}')
+
+        try:
+            part_memory(app)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            check('记忆压缩用例执行', False, f'{type(e).__name__}: {e}')
 
         # 端点准入需要后端以 debug 模式在跑（从日志读验证码）
         try:

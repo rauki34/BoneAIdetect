@@ -134,11 +134,19 @@ class Config:
     # 上下文 token 预算与压缩后至少保留的原文条数（Memory 三层压缩）
     AGENT_CONTEXT_TOKEN_BUDGET = int(_env('AGENT_CONTEXT_TOKEN_BUDGET', 3000))
     AGENT_KEEP_RECENT_MESSAGES = int(_env('AGENT_KEEP_RECENT_MESSAGES', 6))
+    # 读取的历史条数上限。比普通对话的 10 大：压缩需要足够窗口才有意义
+    AGENT_HISTORY_LIMIT = int(_env('AGENT_HISTORY_LIMIT', 40))
+    # 中段摘要超过这个长度就提升为"早期要点"（第三层）
+    AGENT_L2_MAX_CHARS = int(_env('AGENT_L2_MAX_CHARS', 800))
     # 会话摘要（Memory 第 2/3 层，存 Redis 跨进程）。跑一次摘要 = 一次额外
     # LLM 调用 + 2-5 秒，所以只在长会话里触发
     AGENT_SUMMARY_ENABLED = _env('AGENT_SUMMARY_ENABLED', 'true').lower() == 'true'
     AGENT_SUMMARY_MIN_MESSAGES = int(_env('AGENT_SUMMARY_MIN_MESSAGES', 20))
     AGENT_SUMMARY_TTL = int(_env('AGENT_SUMMARY_TTL', 604800))     # 7 天
+    # 摘要调用的硬上限。**不给上限很危险**：它默认会用 provider 超时（120s）
+    # 并重试 3 次，实测一次吃掉 140 秒，而整条编排预算只有 150 秒
+    AGENT_SUMMARY_TIMEOUT = int(_env('AGENT_SUMMARY_TIMEOUT', 30))
+    AGENT_SUMMARY_MAX_TOKENS = int(_env('AGENT_SUMMARY_MAX_TOKENS', 400))
     # 空 = 用 provider 自带的能力标志；显式 true/false 可覆盖
     # （custom provider 默认不支持 function calling）
     AGENT_PROVIDER_SUPPORTS_TOOLS = _env('AGENT_PROVIDER_SUPPORTS_TOOLS', '')

@@ -554,13 +554,19 @@ class LLMClient:
         """
         return bool(getattr(self.provider, 'supports_tools', False))
 
-    def chat(self, messages, *, stream=False, **kwargs):
-        """对话。stream=True 时返回生成器，否则返回完整文本"""
+    def chat(self, messages, *, stream=False, max_retries=None, **kwargs):
+        """对话。stream=True 时返回生成器，否则返回完整文本
+
+        max_retries 供**尽力而为的旁路调用**收紧重试（如会话摘要）：默认
+        重试 3 次在超时场景下最坏要等 3 倍超时，会把整条预算吃掉 ——
+        实测摘要那一次就吃掉了 140 秒。
+        """
         if stream:
             return self._stream_with_retry(messages, **kwargs)
-        return self._call_with_retry('chat', messages, **kwargs)
+        return self._call_with_retry('chat', messages,
+                                     max_retries=max_retries, **kwargs)
 
-    def chat_reply(self, messages, **kwargs) -> LLMReply:
+    def chat_reply(self, messages, *, max_retries=None, **kwargs) -> LLMReply:
         """带工具的结构化对话，返回 LLMReply（含 tool_calls）
 
         重试复用 _call_with_retry：LLM 的 HTTP 调用本身幂等，工具的副作用
@@ -569,7 +575,8 @@ class LLMClient:
         if kwargs.get('tools') and not self.supports_tools:
             raise LLMConfigError(
                 f'{self.provider_name} 不支持工具调用（provider 能力标志为 False）')
-        return self._call_with_retry('chat_reply', messages, **kwargs)
+        return self._call_with_retry('chat_reply', messages,
+                                     max_retries=max_retries, **kwargs)
 
     def chat_text(self, prompt, **kwargs):
         """单轮文本对话的便捷入口"""
@@ -577,14 +584,15 @@ class LLMClient:
 
     # ---------- 重试逻辑 ----------
 
-    def _call_with_retry(self, method, *args, **kwargs):
+    def _call_with_retry(self, method, *args, max_retries=None, **kwargs):
+        attempts = max_retries if max_retries else self.MAX_RETRIES
         last_error = None
-        for attempt in range(self.MAX_RETRIES):
+        for attempt in range(attempts):
             try:
                 return getattr(self.provider, method)(*args, **kwargs)
             except (LLMTimeoutError, LLMConnectionError) as e:
                 last_error = e
-                if attempt < self.MAX_RETRIES - 1:
+                if attempt < attempts - 1:
                     wait = self.BACKOFF_BASE * (2 ** attempt)
                     logger.warning('%s 第 %d 次调用失败，%.1fs 后重试: %s',
                                    self.provider_name, attempt + 1, wait, e)
