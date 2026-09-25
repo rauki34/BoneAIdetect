@@ -22,6 +22,11 @@ import time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
+# load_document 之前在函数体里被引用却从未导入，而调用点包在
+# `except Exception: continue` 里 —— NameError 被吞掉，那条检查一直空过。
+# 提到模块级，让"忘了导入"这类问题在 import 期就暴露。
+from services.rag.loader import load_document  # noqa: E402
+
 WITH_MODELS = '--with-models' in sys.argv
 WITH_LLM = '--with-llm' in sys.argv
 KEEP = '--keep' in sys.argv
@@ -174,14 +179,23 @@ def main():
           f'({dup_pairs[0][3]})' if dup_pairs else '')
 
     # 切片的 section 必须是原文真实存在的标题路径（防止标注凭空产生）
-    invalid_sections = []
+    #
+    # 这里曾经有过一个**空过的检查**：`load_document` 在本函数里从未导入，
+    # 每篇文档都在 `except Exception` 里被静默 `continue` 掉，于是
+    # `invalid_sections` 永远是空的 —— 而详情文案还硬编码写着"抽查 50 篇"，
+    # 报告看起来全绿，实际一篇都没读。现在两处都修：导入补齐，
+    # 并且**一篇都没读到就判失败**（空过必须不可能发生）。
+    invalid_sections, skipped_docs, inspected = [], [], 0
     for doc in KnowledgeDoc.query.filter(KnowledgeDoc.status == 'ready').limit(50):
         if not doc.file_path or not pathlib.Path(doc.file_path).exists():
+            skipped_docs.append(f'{doc.title}: 文件不在磁盘上')
             continue
         try:
             loaded = load_document(doc.file_path)
-        except Exception:
+        except Exception as e:
+            skipped_docs.append(f'{doc.title}: {type(e).__name__}')
             continue
+        inspected += 1
         real_paths = set()
         stack = []
         for line in loaded.text.split('\n'):
@@ -201,10 +215,13 @@ def main():
                 invalid_sections.append(f'{doc.title}#{chunk.chunk_index}: {chunk.section}')
     check('切片章节标注均来自原文真实标题', len(invalid_sections) == 0,
           f'{len(invalid_sections)} 条不符，例如 {invalid_sections[0]}'
-          if invalid_sections else '抽查 50 篇')
+          if invalid_sections else f'抽查 {inspected} 篇')
+    # 无条件产生：否则这个检查"一篇没读"也会显示 PASS
+    check('上述检查确实读到了原文（读到 0 篇即为空过）', inspected > 0,
+          f'实际检查 {inspected} 篇'
+          + (f'，跳过 {len(skipped_docs)} 篇（{skipped_docs[0]}）' if skipped_docs else ''))
 
     # 切片确定性：同一文件两次切片结果应一致
-    from services.rag.loader import load_document
     from services.rag.splitter import MedicalSplitter
     corpus = pathlib.Path(__file__).resolve().parent.parent / 'knowledge' / 'corpus'
     sample_files = sorted(corpus.rglob('*.md'))[:5]

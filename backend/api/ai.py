@@ -77,7 +77,7 @@ def ai_assistant_chat_stream():
     注意：SSE 一旦开始发送就无法再更改 HTTP 状态码，
     因此错误也以 200 + error 事件返回，由前端统一处理。
     """
-    data = request.get_json()
+    data = request.get_json(silent=True)
     if not data:
         return jsonify({"success": False, "error": "请求数据为空"}), 400
 
@@ -177,7 +177,7 @@ def ai_assistant_chat_stream():
 @require_role('patient', 'doctor', 'admin')
 def ai_assistant_chat():
     """AI助手对话接口 - 使用系统配置的AI服务"""
-    data = request.get_json()
+    data = request.get_json(silent=True)
     if not data:
         return jsonify({"success": False, "error": "请求数据为空"}), 400
     

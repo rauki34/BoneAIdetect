@@ -1,0 +1,24 @@
+# CI 用的最小依赖（阶段 11）
+#
+# **为什么不用 -r requirements.txt**：那份清单里有 torch / transformers /
+# sentence-transformers，装一次 2-3 GB、好几分钟，而 CI 上跑的是
+# `tests/unit`（不碰模型、不碰数据库、不发网络请求）。为几十秒的用例装 3 GB
+# 依赖，是在给每次 push 交一笔没必要的税。
+#
+# 取舍要说清楚：**由此 CI 覆盖不到 RAG 检索、Agent 真实编排、YOLO 检测**。
+# 那三块由 `scripts/verify_*.py` 在本机验收（要真实模型与 LLM，见 BASELINE）。
+# 所以 CI 的定位是"拦住改坏了基础契约"，不是"替代验收"。
+#
+# 版本与 requirements.txt **保持一致**：CI 与本地跑在不同的依赖版本上，
+# 绿灯就没有意义了。
+Flask==3.1.2
+Flask-SQLAlchemy==3.1.1
+Flask-JWT-Extended==4.7.1
+SQLAlchemy==2.0.45
+Werkzeug==3.1.4
+requests==2.32.5
+python-dotenv==1.0.1
+
+# 测试与静态检查
+pytest==9.0.2
+ruff==0.16.9

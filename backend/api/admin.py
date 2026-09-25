@@ -820,7 +820,7 @@ def generate_test_data():
     from datetime import datetime, timedelta
     import random
     
-    data = request.get_json() or {}
+    data = request.get_json(silent=True) or {}
     patient_count = data.get('patient_count', 20)
     exam_count = data.get('exam_count', 50)
     

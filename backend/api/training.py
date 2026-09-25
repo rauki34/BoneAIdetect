@@ -171,7 +171,7 @@ def update_dataset(dataset_id):
     if user.role != 'admin' and dataset.uploader != user.username:
         return jsonify({"error": "无权修改此数据集"}), 403
     
-    data = request.get_json()
+    data = request.get_json(silent=True)
     if 'name' in data:
         dataset.name = data['name'].strip()
     if 'description' in data:

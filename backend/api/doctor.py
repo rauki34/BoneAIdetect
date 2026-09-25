@@ -34,7 +34,7 @@ def patients():
     
     elif request.method == 'POST':
         # 添加新患者
-        data = request.get_json() or {}
+        data = request.get_json(silent=True) or {}
         user = get_current_user()
         
         patient = Patient(
@@ -66,7 +66,7 @@ def patient_detail(patient_id):
     
     elif request.method == 'PUT':
         # 更新患者信息
-        data = request.get_json() or {}
+        data = request.get_json(silent=True) or {}
         user = get_current_user()
         
         if 'name' in data:
@@ -120,7 +120,7 @@ def examinations():
     
     elif request.method == 'POST':
         # 添加新检查记录
-        data = request.get_json() or {}
+        data = request.get_json(silent=True) or {}
         user = get_current_user()
         
         # 检查患者是否存在
@@ -159,7 +159,7 @@ def examination_detail(exam_id):
     
     elif request.method == 'PUT':
         # 更新检查记录
-        data = request.get_json() or {}
+        data = request.get_json(silent=True) or {}
         user = get_current_user()
         
         if 'exam_date' in data:

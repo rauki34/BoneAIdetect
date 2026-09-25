@@ -359,7 +359,7 @@ def search():
     能直观看到向量头名与 BM25 头名不同、RRF 如何调和、重排如何定序。
     """
     user = get_current_user()
-    data = request.get_json() or {}
+    data = request.get_json(silent=True) or {}
     query = (data.get('query') or '').strip()
     if not query:
         return jsonify({"success": False, "error": "查询内容不能为空"}), 400

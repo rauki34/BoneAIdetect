@@ -1,8 +1,13 @@
 # 加载 .env —— 必须位于任何项目模块导入之前。
 # utils.logger 在**导入时**就会读取 LOG_LEVEL，若此时 .env 尚未加载，
 # 其中的配置会被静默忽略。
+import json
 import os
 import threading
+# json 只在这一处用到：video_ws 的"任务不存在"错误分支。它此前**没有导入**，
+# 于是那条错误分支自己会抛 NameError —— 客户端连一个不存在的 task_id 时
+# 什么也收不到。与下方 datetime 那个 bug 是同一类：只在错误路径上出现，
+# 正常路径永远走不到，所以一直没被发现。（阶段 11 引入 ruff 后被 F821 抓到。）
 # 全部 9 个 @app.errorhandler 都用 datetime.utcnow() 拼响应里的 timestamp，
 # 而这个导入此前**从未存在**：任何走到错误处理器的请求都会在处理器内部抛
 # NameError，返回 500 的 HTML 调试页，而不是约定好的 JSON 错误体。
@@ -160,6 +165,29 @@ def handle_api_error(error):
     )
     
     return jsonify(response), error.status_code
+
+
+@app.errorhandler(415)
+def handle_unsupported_media(error):
+    """请求体不是 JSON 时返回 415（而不是 500）
+
+    Flask 的 `request.get_json()` 在 Content-Type 不是 application/json 时抛
+    UnsupportedMediaType。**而 Flask 会按类层次找处理器** —— 415 继承自
+    Exception，于是被本文件末尾注册的 `@app.errorhandler(Exception)` 接住，
+    返回 500 "未知错误"。后果是：客户端漏带 `Content-Type: application/json`
+    时，看到的是"服务器内部错误"，而真实原因是它自己的请求写得不对。
+
+    阶段 11 写测试时发现：`POST /api/ai-assistant/chat` 带合法 token 但不带
+    body → 500。视图层已改成 `get_json(silent=True)`（走各自的"请求数据为空"
+    分支），这里再做一层兜底，新写的视图即使忘了也不会退化成 500。
+    """
+    response = {
+        "error": "请求体必须是 JSON（请带上 Content-Type: application/json）",
+        "error_code": "VALIDATION_002",
+        "message": str(error),
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+    return jsonify(response), 415
 
 
 @app.errorhandler(400)

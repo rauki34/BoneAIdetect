@@ -11,10 +11,14 @@ import os
 from collections import defaultdict
 from threading import Lock
 
-from ultralytics import YOLO
-
 from core.paths import MODEL_CANDIDATES
 from utils.logger import logger
+
+# ultralytics（连带 torch，2-3 GB）**不在模块顶层导入**：本模块承载的是限流
+# 配置、额度配置、验证码这类轻量共享状态，凡是 import 它的人都会被迫拖入 torch。
+# 实测代价：`core.quota` → `core.state` → ultralytics，于是"验证额度计数"这种
+# 纯逻辑用例也必须先装 3 GB 依赖（阶段 11 做 CI 时在干净 venv 里撞到）。
+# 改成在真正要加载模型的地方导入 —— 与 services/rag/__init__.py 的既有约定一致。
 
 # ---------- 验证码 ----------
 # {captcha_id: {'code': 'ABC1', 'expire_time': timestamp}}
@@ -27,6 +31,7 @@ models = {}
 
 def load_models():
     """加载预置模型（仅加载存在的权重文件，避免启动失败）"""
+    from ultralytics import YOLO        # 延迟导入，理由见文件头
     loaded = {}
     for name, path in MODEL_CANDIDATES.items():
         if os.path.exists(path):
