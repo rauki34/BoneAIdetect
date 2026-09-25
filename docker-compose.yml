@@ -1,18 +1,32 @@
 # 一键起全套（阶段 11）
 #
-# ⚠️ **本文件未经实跑验证**：开发机没有 Docker（阶段 11 时的状态）。结构与语法
-# 做过静态校验（YAML 可解析、服务名/依赖/卷路径与仓库实际布局一致），但没有真正
-# `docker compose up` 跑通过。
+# ⚠️ **编排未实跑验证**（2026-09-25）
 #
-# 装好 Docker Desktop 后的验证步骤（跑完请把上面这段删掉）：
-#     cp .env.example .env && 填 POSTGRES_PASSWORD / SECRET_KEY
+# 已经验证的：用**真正的 compose 解析器**跑过 `docker compose config`（exit 0、零警告）——
+# schema、变量插值、嵌套默认值 `${JWT_SECRET_KEY:-${SECRET_KEY}}`、七个命名卷、
+# celery 命令的列表形式全部解析正确；另做了结构自检（build 上下文与 Dockerfile 存在、
+# 挂载路径真实、卷名与 services 引用一致）。
+#
+# **没有验证的：实际构建与启动**。本机装了 Docker Desktop（按用户安装，位于
+# `%LOCALAPPDATA%\Programs\DockerDesktop`），但引擎起不来 —— Docker Desktop 报
+# "Virtualization support not detected"。诊断结论：**不是硬件问题**
+# （HP 真机、i7-12700H 支持 VT-x，且 VBS 正在运行 = Windows 自己已经在用虚拟化），
+# 缺的是 WSL2 所需的 Windows 功能。要跑起来需要**管理员权限 + 重启**：
+#
+#     dism /online /enable-feature /featurename:VirtualMachinePlatform /all /norestart
+#     dism /online /enable-feature /featurename:Microsoft-Windows-Subsystem-Linux /all /norestart
+#     # 重启后
+#     wsl --install --no-distribution
+#
+# 功能就绪后的验证步骤（跑完请把本段替换成实测结果）：
+#     cp .env.example .env      # 填 POSTGRES_PASSWORD / SECRET_KEY（.env 已被 gitignore）
 #     docker compose up -d --build
-#     docker compose ps                      # 期望 5 个服务 healthy
-#     curl -s localhost:5000/api/health      # 期望 {"status":"ok","db":true,...}
-#     curl -s localhost:8080/api/health      # 经 nginx 反代，同样应通
+#     docker compose ps                       # 期望 6 个服务 Up/healthy
+#     curl -s localhost:5001/api/health        # 期望 {"status":"ok","db":true,...}
+#     curl -s localhost:8080/api/health        # 经 nginx 反代，同样应通
 #
-# 与本地开发脚本（backend/scripts/*.sh）的关系：两套并存，互不干扰 ——
-# 脚本管本机直跑，compose 管容器编排。注意**两者不能同时占用同一批端口**。
+# 注意端口：compose 里 backend 默认发布到 5000，与本地 `scripts/flask.sh` 冲突，
+# 因此 .env 里用 BACKEND_PORT=5001。两套并存，互不干扰。
 
 services:
   postgres:

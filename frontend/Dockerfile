@@ -1,6 +1,7 @@
 # 前端镜像：构建静态产物后用 nginx 托管
 #
-# ⚠️ **本文件未经实跑验证**：开发机没有 Docker（阶段 11 时的状态）。
+# ⚠️ **本文件未经实跑验证**：本机 Docker 引擎起不来（缺 WSL2 所需的 Windows 功能，
+# 诊断与启用步骤见 docker-compose.yml 顶部）。
 #
 # 构建时用的是 .env.production —— 其中 VITE_API_BASE 为空，即前端走**相对路径**
 # `/api`，由 nginx.conf 反向代理到后端容器。这是这套部署的既定设计

@@ -1,8 +1,9 @@
 # 后端镜像（Flask + Celery worker 共用）
 #
-# ⚠️ **本文件未经实跑验证**：开发机没有 Docker（阶段 11 时的状态）。
-# 语法与 compose 编排结构做过静态校验，但没有真正 build 起来过。
-# 装好 Docker 后请按 docker-compose.yml 顶部的说明跑一次，再把这一段删掉。
+# ⚠️ **本文件未经实跑验证**：本机 Docker 引擎起不来（缺 WSL2 所需的 Windows
+# 功能，见 docker-compose.yml 顶部的诊断与启用步骤）。语法与编排结构已用真正的
+# compose 解析器校验过（`docker compose config` 零警告），但没有真正 build 起来过。
+# 引擎就绪后请按 docker-compose.yml 顶部的步骤跑一次，再把这一段删掉。
 #
 # 体积提醒：requirements.txt 里有 torch/torchvision/ultralytics，镜像约 5-7 GB。
 # 只要 CPU 推理时可用 --build-arg TORCH_INDEX_URL=... 换成 CPU 版 torch，
