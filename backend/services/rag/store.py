@@ -78,6 +78,21 @@ _DDL_COLUMNS = (
         'ALTER TABLE training_tasks '
         'ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP',
     ),
+    (
+        # 阶段 9：Agent 会话的「主体患者」。**与 patient_id 的语义不同** ——
+        # patient_id 是会话归属人（history/sessions 都按它过滤），把主体患者写进
+        # 那一列会让医生的会话出现在患者的会话列表里（串话 + 越权）。
+        # 列定义在 database.AIConversation，但 create_all() 不改已存在的表。
+        'ai_conversations.context_patient_id',
+        'ALTER TABLE ai_conversations '
+        'ADD COLUMN IF NOT EXISTS context_patient_id INTEGER',
+    ),
+    (
+        # 阶段 9：Agent 的执行轨迹（JSON 数组字符串）。不存的话刷新页面轨迹就丢，
+        # 与 references 当初的理由相同。
+        'ai_conversations.agent_trace',
+        'ALTER TABLE ai_conversations ADD COLUMN IF NOT EXISTS agent_trace TEXT',
+    ),
 )
 
 

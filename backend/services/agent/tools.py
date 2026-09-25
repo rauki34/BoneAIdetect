@@ -148,8 +148,9 @@ def _fingerprint(name, args):
         '（分型标准、愈合与负重时间、康复训练原则）时必须先调用本工具。'
         '只检索共享知识库，**不含任何患者个人数据**（患者本人的病历请用 '
         'query_medical_records）。'
-        '返回 error=not_found 表示知识库中确实没有相关资料，此时必须如实'
-        '告知用户"现有资料无法回答"，不得凭记忆编造；'
+        '返回 error=not_found 表示知识库中确实没有相关资料'
+        '（已按相关度阈值过滤，与问题沾边的弱相关片段也不算数），此时必须'
+        '如实告知用户"现有资料无法回答"，不得凭记忆编造；'
         '返回 error=unsupported 表示检索服务当前不可用，应告知用户暂时'
         '无法查证，同样不得编造。'),
     parameters={
@@ -188,6 +189,16 @@ def search_guideline(principal, args):
         if breaker_open():
             return err('unsupported', '检索服务不可用，请稍后再试')
         return err('not_found', '知识库中没有找到相关资料')
+
+    # **相关度阈值**：向量检索是最近邻，无论问什么都会凑满 top_k —— 问"骨肉瘤
+    # 的 Enneking 分期"（本语料没有）也会返回几条分数 0.006 的无关片段。若不
+    # 拦截，模型会把它们当成依据来作答，而工具契约里的 not_found 就永远不可达。
+    # 实测本语料的分数两极分化：真命中 ≥ 0.9，缺题 ≤ 0.2，阈值取中间。
+    best = max((c.score or 0.0) for c in chunks)
+    if best < config.AGENT_RAG_MIN_SCORE:
+        return err('not_found',
+                   f'知识库中没有与该问题相关的资料（最高相关度 {best:.2f}，'
+                   f'低于阈值 {config.AGENT_RAG_MIN_SCORE}）')
     return {
         'count': len(chunks),
         'context': format_context(chunks),          # 给模型读的正文

@@ -127,6 +127,10 @@ class Config:
     AGENT_MAX_QUESTION_CHARS = int(_env('AGENT_MAX_QUESTION_CHARS', 2000))
     # agent 内检索条数。比 RAG_TOP_K 小，因为工具结果还要叠加进上下文
     AGENT_RAG_TOP_K = int(_env('AGENT_RAG_TOP_K', 4))
+    # 指南检索的相关度下限：低于它就当作"知识库没有这条"，而不是把弱相关
+    # 片段交给模型当依据。向量检索是最近邻，不设阈值时 not_found 永远不可达。
+    # 实测本语料真命中 ≥0.9、缺题 ≤0.2，故取中间值。
+    AGENT_RAG_MIN_SCORE = float(_env('AGENT_RAG_MIN_SCORE', 0.25))
     # 上下文 token 预算与压缩后至少保留的原文条数（Memory 三层压缩）
     AGENT_CONTEXT_TOKEN_BUDGET = int(_env('AGENT_CONTEXT_TOKEN_BUDGET', 3000))
     AGENT_KEEP_RECENT_MESSAGES = int(_env('AGENT_KEEP_RECENT_MESSAGES', 6))

@@ -295,6 +295,13 @@ class AIConversation(db.Model):
     # 页面一刷新引用卡片就没了——回答正文还留着自己的 [1][2] 角标。
     references = db.Column(db.Text)
     context_report_id = db.Column(db.Integer, db.ForeignKey('detection_history.id'))  # 关联的报告
+    # 阶段 9：Agent 会话的「主体患者」。**与 patient_id 语义不同** —— patient_id 是
+    # 会话归属人（history/sessions 都按它过滤），主体患者若写进那一列，医生的会话
+    # 就会出现在患者的会话列表里（串话 + 越权）。裸列不加外键：它可能指向已删用户，
+    # 且加外键会让 ADD COLUMN 变慢。
+    context_patient_id = db.Column(db.Integer)
+    # 阶段 9：Agent 执行轨迹（JSON 数组字符串）。刷新页面后轨迹不丢，同 references。
+    agent_trace = db.Column(db.Text)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
 
     # 关系定义
@@ -316,6 +323,8 @@ class AIConversation(db.Model):
             'message_content': self.message_content,
             'references': safe_json_loads(self.references, []),
             'context_report_id': self.context_report_id,
+            'context_patient_id': self.context_patient_id,
+            'agent_trace': safe_json_loads(self.agent_trace, []),
             'created_at': to_local_time(self.created_at)
         }
     

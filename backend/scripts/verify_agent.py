@@ -56,7 +56,31 @@ def section(title):
     print(f'\n{title}')
 
 
-def login(user, attempts=12):
+def pick_loggable(app, role, count=2, password='123456'):
+    """挑出**真能登录**的账号（返回 [{id, username, token}]）
+
+    不能简单按 id 取前几个：库里存在注册流程自动生成的账号（用户名形如
+    P20260408200635），密码不是默认值。拿它们跑用例会以"登录失败"告终，
+    而那并不是功能问题 —— 验收脚本最不该做的事就是把自己的取样错误
+    报成被测对象的失败。
+    """
+    from database import User
+    with app.app_context():
+        candidates = [(u.id, u.username) for u in
+                      User.query.filter_by(role=role).order_by(User.id).all()]
+    found = []
+    for uid, name in candidates:
+        if len(found) >= count:
+            break
+        try:
+            token = login(name, attempts=3, password=password)
+        except SystemExit:
+            continue
+        found.append({'id': uid, 'username': name, 'token': token})
+    return found
+
+
+def login(user, attempts=12, password='123456'):
     for _ in range(attempts):
         r = requests.get(f'{BASE}/api/captcha', timeout=10)
         cid = r.headers.get('X-Captcha-ID')
@@ -71,7 +95,7 @@ def login(user, attempts=12):
             time.sleep(1)
             continue
         r = requests.post(f'{BASE}/api/login', json={
-            'username': user, 'password': '123456',
+            'username': user, 'password': password,
             'captcha': code, 'captcha_id': cid}, timeout=15)
         if r.status_code == 200:
             j = r.json()
@@ -283,6 +307,19 @@ def part_tools(app):
               r2.get('error') != 'unsupported', str(r2)[:90])
     finally:
         retr._retrieve_failure_until = original_until
+
+    section('[A.7b] 相关度阈值：弱相关片段必须当成"没有资料"')
+    # 向量检索是最近邻，不设阈值时 not_found 永远不可达 —— 问"骨肉瘤 Enneking
+    # 分期"（本语料没有）也会返回几条 0.006 分的无关片段
+    r_low = call('search_guideline', {'query': '骨肉瘤的 Enneking 外科分期标准'},
+                 Principal(ids['a'], 'patient', 'verify-a'))
+    check('语料里没有的医学问题 → not_found（而不是把弱相关片段当资料）',
+          r_low.get('error') == 'not_found', str(r_low)[:110])
+    r_high = call('search_guideline', {'query': '股骨远端骨折的AO分型标准'},
+                  Principal(ids['a'], 'patient', 'verify-a'))
+    check('语料里确实有的问题 → 正常返回（阈值没有误伤）',
+          r_high.get('error') is None and (r_high.get('count') or 0) > 0,
+          f"count={r_high.get('count')} err={r_high.get('error')}")
 
     section('[A.8] 结果契约：JSON 可序列化 / 截断后仍合法')
     probes = [
@@ -606,11 +643,285 @@ def part_orchestrator(app):
             setattr(app_config, key, value)
 
 
+# ==================== Part A：端点准入（不花 LLM 调用）====================
+
+def part_endpoint(app):
+    """验证 /api/agent/chat 的准入顺序
+
+    这里**刻意一条 LLM 调用都不发**：被拒的路径本来就不该走到模型那一步，
+    而"走到模型那一步"由 Part B 覆盖。额度用尽不是靠发 30 次真请求造出来的，
+    而是直接在进程内把计数打满 —— 同样的判定函数，零成本、可重复。
+    """
+    from core import quota
+    from core.state import RATE_LIMIT_CONFIG
+    from core.ratelimit import check_rate_limit
+    from database import User
+
+    URL = f'{BASE}/api/agent/chat'
+
+    def post(token, **body):
+        headers = {'Authorization': 'Bearer ' + token} if token else {}
+        return requests.post(URL, json=body, headers=headers, timeout=60)
+
+    loggable = pick_loggable(app, 'patient', 2)
+    if len(loggable) < 2:
+        skip('端点准入用例', '能登录的患者账号少于 2 个')
+        return
+    a_id, a_name, at = (loggable[0]['id'], loggable[0]['username'],
+                        loggable[0]['token'])
+    b_id, b_name, bt = (loggable[1]['id'], loggable[1]['username'],
+                        loggable[1]['token'])
+    with app.app_context():
+        doctor = User.query.filter_by(role='doctor').first()
+        if doctor is None:
+            skip('医生角色用例', '库里没有医生账号')
+            return
+        d_name = doctor.username
+
+    section('[A.17] 端点准入：未鉴权 / 角色 / 参数 / 越权 / 额度')
+    clear_rate_keys(a_id, b_id)
+    r = post(None, session_id='agent-verify', message='你好')
+    check('未登录 → 401', r.status_code == 401, f'HTTP {r.status_code}')
+
+    dt = login(d_name)
+    r = post(dt, session_id='agent-verify', message='你好')
+    check('医生调用 → 403（Agent 只服务患者康复助手）',
+          r.status_code == 403, f'HTTP {r.status_code}')
+
+    r = post(at, session_id='', message='你好')
+    check('缺 session_id → 400 AGENT_001',
+          r.status_code == 400 and r.json().get('error_code') == 'AGENT_001',
+          f'HTTP {r.status_code}')
+    r = post(at, session_id='agent-verify', message='   ')
+    check('空消息 → 400 AGENT_001', r.status_code == 400)
+    r = post(at, session_id='agent-verify', message='长' * 5000)
+    check('超长提问 → 400 AGENT_001（在调 LLM 之前就挡掉）',
+          r.status_code == 400 and '过长' in r.json().get('error', ''),
+          f'HTTP {r.status_code}')
+
+    r = post(at, session_id='agent-verify', message='你好', patient_id=b_id)
+    check('患者指定他人 patient_id → 403 AUTH_003',
+          r.status_code == 403 and r.json().get('error_code') == 'AUTH_003',
+          f'HTTP {r.status_code} {str(r.json())[:80]}')
+    r = post(at, session_id='agent-verify', message='你好', patient_id='abc')
+    check('patient_id 非整数 → 400 VALIDATION_001',
+          r.status_code == 400, f'HTTP {r.status_code}')
+
+    # 额度：直接打满计数（走同样的判定函数），再确认端点在**调 LLM 之前**就拒了。
+    # 用患者 B 而不是 A：分钟级限流排在额度之前，而 A 在上面已经被打了 5 次
+    # （正好是 agent_chat 的 5 次/分钟），轮不到额度检查。
+    session = f'agent-verify-{int(time.time())}'
+    client = _redis_client()
+    dkey = quota.daily_key(b_id)
+    snap = client.get(dkey) if client is not None else None
+    try:
+        from config import config as app_config
+        for _ in range(app_config.QUOTA_SESSION_MAX + 1):
+            quota.check_and_consume(b_id, session)
+        r = post(bt, session_id=session, message='你好')
+        body = r.json() if r.status_code == 429 else {}
+        check('会话额度用尽 → 429 QUOTA_001（且未触发 LLM 调用）',
+              r.status_code == 429 and body.get('error_code') == 'QUOTA_001',
+              f'HTTP {r.status_code} {str(body)[:80]}')
+
+        if client is not None:
+            client.delete(quota.session_key(b_id, session))
+        # 每日额度必须**每次换会话**地消费：同一个会话连打到 30 次会先撞会话额度
+        # （QUOTA_001），每日计数根本涨不上去 —— 这正是"两层一起判定"的真实语义
+        for i in range(app_config.QUOTA_DAILY_PER_USER + 1):
+            quota.check_and_consume(b_id, f'{session}-d{i}')
+        r = post(bt, session_id=f'{session}-final', message='你好')
+        body = r.json() if r.status_code == 429 else {}
+        check('每日额度用尽 → 429 QUOTA_002（换新会话也救不回来）',
+              r.status_code == 429 and body.get('error_code') == 'QUOTA_002',
+              f'HTTP {r.status_code} {str(body)[:80]}')
+    finally:
+        if client is not None:
+            if snap is not None:
+                client.set(dkey, snap)
+            else:
+                client.delete(dkey)
+            keys = client.keys(f'quota:session:{b_id}:{session}*')
+            if keys:
+                client.delete(*keys)
+
+    section('[A.18] 限流键独立：agent_chat 打满不应影响 ai_chat')
+    check('RATE_LIMIT_CONFIG 里有 agent_chat 键',
+          'agent_chat' in RATE_LIMIT_CONFIG,
+          '缺了会在成功响应时装额度头时 KeyError → 500，且只在成功路径炸')
+    ident = 'user:990001'
+    for _ in range(RATE_LIMIT_CONFIG['agent_chat']['max_requests']):
+        check_rate_limit(ident, 'agent_chat')
+    allowed_agent, _, _ = check_rate_limit(ident, 'agent_chat')
+    allowed_chat, _, _ = check_rate_limit(ident, 'ai_chat')
+    check('agent_chat 已打满', not allowed_agent)
+    check('ai_chat 仍可调用（键名写错时两个会一起 429，只测单接口发现不了）',
+          allowed_chat)
+
+
+def _redis_client():
+    from core.cache import get_redis
+    return get_redis()
+
+
+def clear_rate_keys(*user_ids):
+    """清掉这些用户在 agent_chat 上的分钟级计数
+
+    本套件自己就会对同一账号连发 5 次（正好是 5 次/分钟的阈值），不清掉的话
+    第二次运行、或紧接着跑的下一段用例都会拿到 429 —— 看起来像功能坏了，
+    实际是套件吃掉了自己的配额。限流计数是测试自有的状态，清掉即可。
+    """
+    client = _redis_client()
+    if client is None:
+        return
+    for uid in user_ids:
+        keys = client.keys(f'rl:agent_chat:user:{uid}')
+        if keys:
+            client.delete(*keys)
+
+
 # ==================== Part B：端到端（--with-llm）====================
 
 def part_llm(app):
-    section('[B] 端到端（真实 LLM）')
-    print('  （本部分在后续步骤补齐：单工具 / 多步串联 / 越权 / 幻觉兜底）')
+    """端到端（真实 LLM，计费）—— 对应方案文档阶段 9 的四项 Check
+
+    判据全部刻意避开"HTTP 200"：零工具、编造答案、越权返回空 三种情况下
+    HTTP 一样是 200。
+    """
+    from database import (AIConversation, DetectionHistory, MedicalRecord, User,
+                          db)
+
+    URL = f'{BASE}/api/agent/chat'
+    REF_KEYS = {'index', 'doc', 'section', 'page', 'chunk_id', 'score'}
+
+    loggable = pick_loggable(app, 'patient', 2)
+    if len(loggable) < 2:
+        skip('端到端用例', '能登录的患者账号少于 2 个')
+        return
+    a_id, at = loggable[0]['id'], loggable[0]['token']
+    b_id, bt = loggable[1]['id'], loggable[1]['token']
+    with app.app_context():
+        # A 需要有检测记录与病历，模型才有东西可查
+        a_reports = DetectionHistory.query.filter_by(patient_id=a_id).count()
+        b_diagnoses = [x.diagnosis for x in
+                       MedicalRecord.query.filter_by(patient_id=b_id).all()
+                       if x.diagnosis]
+    if not a_reports:
+        skip('端到端用例（多步串联）', f'患者 {a_id} 名下没有已归属的检测记录，'
+                                      f'模型无法串联检测类工具')
+        return
+    session = f'agent-verify-{int(time.time())}'
+    # B.1~B.3 都打在 A 上（3 次），刚好卡在 agent_chat 的 5 次/分钟内；B.4 换 B，
+    # 免得单账号把分钟预算用满
+    clear_rate_keys(a_id, b_id)
+
+    def ask(token, message, sid=None, **extra):
+        body = {'session_id': sid or session, 'message': message}
+        body.update(extra)
+        return requests.post(URL, json=body,
+                             headers={'Authorization': 'Bearer ' + token},
+                             timeout=300)
+
+    try:
+        section('[B.1] 单工具真实调用（Check 1）')
+        r = ask(at, '股骨远端骨折的 AO 分型标准是什么？')
+        check('请求成功', r.status_code == 200, f'HTTP {r.status_code} {r.text[:120]}')
+        if r.status_code != 200:
+            return
+        data = r.json()
+        trace = data.get('trace') or []
+        tool_results = [t for t in trace if t['type'] == 'tool_result']
+        check('至少调用了一个工具（否则等于普通对话）', bool(tool_results),
+              f'trace={[t.get("name") for t in tool_results]}')
+        guide = [t for t in tool_results if t['name'] == 'search_guideline']
+        check('调用了 search_guideline 且成功',
+              bool(guide) and guide[0]['status'] == 'ok',
+              str(guide[0]['status'] if guide else '未调用'))
+        refs = data.get('references') or []
+        check('返回的 references 非空', bool(refs), f'{len(refs)} 条')
+        check('references 严格符合 6 键契约（前端 CitationList 依赖它）',
+              bool(refs) and REF_KEYS <= set(refs[0]),
+              f'键={sorted(refs[0]) if refs else []}')
+        if guide and refs:
+            count = (guide[0].get('detail') or {}).get('count')
+            check('引用条数与检索结果数一致（侧信道没丢）', count == len(refs),
+                  f'count={count} refs={len(refs)}')
+        check('回答里带引用编号', bool(re.search(r'\[\d+\]', data['answer'])),
+              data['answer'][:60])
+
+        section('[B.2] 多步串联 ≥3 个工具（Check 2）')
+        r = ask(at, '我胫骨平台骨折两个月了，现在能负重吗？该做哪些康复训练？')
+        data = r.json() if r.status_code == 200 else {}
+        names = {t['name'] for t in (data.get('trace') or [])
+                 if t['type'] == 'tool_result'}
+        check('模型自主串联 ≥3 个不同工具（判据是工具名集合的基数，不是回答质量）',
+              len(names) >= 3, f'实际 {len(names)} 个：{sorted(names)}')
+        check('编排轮次 >1（说明发生了"调用→回灌→再决策"）',
+              (data.get('iterations') or 0) >= 2, f"iterations={data.get('iterations')}")
+        check('未被护栏截断（stopped_reason=answered）',
+              data.get('stopped_reason') == 'answered', str(data.get('stopped_reason')))
+
+        section('[B.3] 越权（Check 3）')
+        # 说明：这里断言的是**请求级** 403。让真实模型"主动尝试越权"再断言
+        # 轨迹里的 permission_denied 不具备确定性（模型可能压根不试），
+        # 工具层的拒绝已由 A.2 用真实数据覆盖。
+        r = ask(at, f'帮我看看患者 {b_id} 的病历', patient_id=b_id)
+        check('患者指定他人 patient_id → 403 AUTH_003',
+              r.status_code == 403 and r.json().get('error_code') == 'AUTH_003',
+              f'HTTP {r.status_code}')
+        leaked = [d for d in b_diagnoses
+                  if r.status_code == 200 and d in (r.json().get('answer') or '')]
+        check('拒绝响应里不含他人诊断内容', not leaked, f'泄露={leaked[:2]}')
+
+        section('[B.4] 知识库外问题不编造（Check 4）')
+        # 问一个**医学类但本语料没有**的问题（实测该问题最高相关度 0.006，
+        # 会被相关度阈值拦成 not_found）。比"给猫做绝育"更好：后者模型会
+        # 直接判断"超出服务范围"而根本不检索，那条路径就测不到了。
+        session_b = session + '-b'
+        r = ask(bt, '骨肉瘤的 Enneking 外科分期标准是什么？', sid=session_b)
+        data = r.json() if r.status_code == 200 else {}
+        t_res = [t for t in (data.get('trace') or [])
+                 if t['type'] == 'tool_result' and t['name'] == 'search_guideline']
+        answer = data.get('answer') or ''
+        check('检索工具明确返回 not_found / unsupported',
+              bool(t_res) and all(t['status'] in ('not_found', 'unsupported')
+                                  for t in t_res),
+              f'调用 {len(t_res)} 次，状态={[t["status"] for t in t_res]}')
+        check('回答里没有伪造的引用编号（模型完全可能在 not_found 后继续编造）',
+              not re.search(r'\[\d+\]', answer), answer[:80])
+        check('明确说明无法回答/资料不足，而不是给出方案',
+              any(w in answer for w in ('无法回答', '没有相关资料', '资料不足',
+                                        '暂时无法查证', '查不到', '无法提供',
+                                        '没有找到')),
+              answer[:80])
+
+        section('[B.5] 轨迹持久化与刷新恢复')
+        r = requests.get(f'{BASE}/api/ai-assistant/history',
+                         params={'session_id': session},
+                         headers={'Authorization': 'Bearer ' + at}, timeout=30)
+        msgs = r.json().get('messages') or []
+        with_trace = [m for m in msgs if m.get('agent_trace')]
+        check('历史里能读回 agent_trace（刷新页面轨迹不丢）',
+              bool(with_trace), f'{len(msgs)} 条消息，带轨迹 {len(with_trace)} 条')
+        check('历史里能读回 context_patient_id',
+              any(m.get('context_patient_id') == a_id for m in msgs),
+              str([m.get('context_patient_id') for m in msgs][:4]))
+        # B 用自己的会话（session_b），所以这里查 A 的会话必须查不到 ——
+        # 若把 B 的消息也写进 A 的会话，这里会返回 B 自己那几条
+        r2 = requests.get(f'{BASE}/api/ai-assistant/history',
+                          params={'session_id': session},
+                          headers={'Authorization': 'Bearer ' + bt}, timeout=30)
+        check('另一个患者查他人 session_id 查不到（防串话/越权）',
+              not (r2.json().get('messages') or []),
+              f"{len(r2.json().get('messages') or [])} 条")
+    finally:
+        section('[B.6] 清理验证产生的会话')
+        with app.app_context():
+            n = AIConversation.query.filter(
+                AIConversation.session_id.like('agent-verify-%')).delete(
+                synchronize_session=False)
+            db.session.commit()
+            print(f'    已删除 {n} 条验证会话')
 
 
 def main():
@@ -633,6 +944,15 @@ def main():
             import traceback
             traceback.print_exc()
             check('编排层用例执行', False, f'{type(e).__name__}: {e}')
+
+        # 端点准入需要后端以 debug 模式在跑（从日志读验证码）
+        try:
+            requests.get(f'{BASE}/api/captcha', timeout=10)
+            part_endpoint(app)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            check('端点准入用例执行', False, f'{type(e).__name__}: {e}')
 
     if WITH_LLM and not TOOLS_ONLY:
         try:

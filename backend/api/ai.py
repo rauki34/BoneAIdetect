@@ -12,6 +12,8 @@ from core import quota
 from core.helpers import can_access_patient
 from core.ratelimit import limit
 from database import db, AIConversation, safe_json_loads
+from services.agent import orchestrator
+from services.agent.principal import Principal
 from services.ai_service import (
     _build_assistant_messages, build_rag_context, call_ai_assistant_api,
     get_llm_client,
@@ -250,6 +252,130 @@ def ai_assistant_chat():
         logger.error(f"AI助手对话失败: {e}")
         return jsonify({"success": False, "error": "AI服务暂时不可用，请稍后再试"}), 503
 
+def _slim_trace(trace, limit):
+    """落库前压缩执行轨迹
+
+    轨迹是给前端渲染"正在查询指南→已完成"用的，detail 只在排查时才看。
+    不压缩的话一条 5 轮编排的轨迹能到几十上百 KB，塞进 TEXT 列没有意义。
+    分两级降级：先去 detail，再只留展示必需字段。
+    """
+    if len(json.dumps(trace, ensure_ascii=False)) <= limit:
+        return trace
+    slim = [{k: v for k, v in t.items() if k != 'detail'} for t in trace]
+    if len(json.dumps(slim, ensure_ascii=False)) <= limit:
+        return slim
+    keep = ('step', 'type', 'name', 'status', 'summary', 'elapsed_ms')
+    return [{k: t.get(k) for k in keep} for t in trace]
+
+
+@bp.route("/api/agent/chat", methods=["POST"])
+@limit('agent_chat', key='user')   # 一次 Agent 请求最坏 5 次 LLM 调用，故阈值减半
+@require_role('patient')           # 只服务患者康复助手；医生侧与检测解读不需要 Agent
+def agent_chat():
+    """Agent 康复助手对话：模型自主决定调用哪些工具，返回执行轨迹
+
+    与 /api/ai-assistant/chat 的分工：那条是「检索→一次性回答」，这条是
+    「多轮工具编排」。响应契约不同（多了 execution_trace），所以独立成端点，
+    降级路径也因此有唯一的实现点。
+    """
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({"success": False, "error": "请求数据为空",
+                        "error_code": "AGENT_001"}), 400
+
+    session_id = (data.get('session_id') or '').strip()
+    message = (data.get('message') or '').strip()
+    if not session_id or len(session_id) > 64:
+        return jsonify({"success": False, "error": "会话ID不能为空或过长",
+                        "error_code": "AGENT_001"}), 400
+    if not message:
+        return jsonify({"success": False, "error": "消息内容不能为空",
+                        "error_code": "AGENT_001"}), 400
+    max_chars = current_app.config.get('AGENT_MAX_QUESTION_CHARS', 2000)
+    if len(message) > max_chars:
+        return jsonify({"success": False,
+                        "error": f"提问过长（上限 {max_chars} 字）",
+                        "error_code": "AGENT_001"}), 400
+
+    user = get_current_user()
+
+    # 主体患者：患者传非本人 id 会被 AUTH_003 拒（越权不是靠"参数不存在"挡住的）
+    subject_id, _include_personal, err = _resolve_request_patient(user, data)
+    if err:
+        return err
+
+    # 额度必须在**调 LLM 之前**消费：准入后再算等于先烧钱再拒绝
+    qr = None
+    if not quota.is_exempt(user):
+        qr = quota.check_and_consume(user.id, session_id)
+        if not qr.allowed:
+            return quota.denial_response(qr)
+
+    # 提问先落库：即使编排中途失败，用户的问题也不会丢（同流式端点的理由）
+    user_msg = AIConversation(
+        patient_id=user.id,                     # 会话归属人，**不是**主体患者
+        session_id=session_id, message_type='user',
+        message_content=message, context_patient_id=subject_id)
+    db.session.add(user_msg)
+    db.session.commit()
+
+    try:
+        state = orchestrator.run(
+            message, session_id=session_id, principal=Principal.of(user),
+            patient_id=subject_id, exclude_message_id=user_msg.id)
+    except Exception as e:
+        db.session.rollback()
+        logger.error('Agent 编排异常: %s', e, exc_info=True)
+        return jsonify({"success": False, "error": "助手暂时不可用，请稍后再试",
+                        "error_code": "AGENT_005"}), 503
+
+    answer, degraded = state.answer, state.degraded
+    degraded_reason = state.degraded_reason
+
+    if not answer:
+        # 编排没产出回答 → 退回既有对话路径。这是"任何路径都不让对话不可用"
+        # 的最后一道：call_ai_assistant_api 内部还有它自己的静默降级。
+        try:
+            answer = call_ai_assistant_api(_build_assistant_messages(user.id, session_id))
+            degraded, degraded_reason = True, degraded_reason or 'fallback_plain_chat'
+        except Exception as e:
+            db.session.rollback()
+            logger.error('Agent 降级后的普通对话也失败: %s', e, exc_info=True)
+            return jsonify({"success": False, "error": "AI服务暂时不可用，请稍后再试",
+                            "error_code": "AGENT_005"}), 503
+
+    trace = _slim_trace(state.trace, current_app.config.get('AGENT_TRACE_MAX_CHARS', 20000))
+    try:
+        db.session.add(AIConversation(
+            patient_id=user.id, session_id=session_id, message_type='assistant',
+            message_content=answer,               # LLMReply.content 保证非 None
+            references=(json.dumps(state.references, ensure_ascii=False)
+                        if state.references else None),
+            agent_trace=json.dumps(trace, ensure_ascii=False) if trace else None,
+            context_patient_id=subject_id))
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        logger.error('保存 Agent 回复失败: %s', e, exc_info=True)
+        # 回答已经拿到，落库失败不该让它变成 500 —— 与既有端点的取舍不同，
+        # 这里刻意不返回错误：用户拿不到的是"刷新后仍在"，不是这一次的回答
+
+    resp = jsonify({
+        "success": True,
+        "answer": answer,
+        "trace": trace,
+        "references": state.references,
+        "session_id": session_id,
+        "stopped_reason": state.stopped_reason,
+        "iterations": state.iterations,
+        "tool_calls": state.tool_calls_made,
+        "elapsed_ms": state.elapsed_ms,
+        "degraded": degraded,
+        "degraded_reason": degraded_reason or None,
+    })
+    return quota.attach_headers(resp, qr) if qr else resp
+
+
 @bp.route("/api/ai-assistant/history", methods=["GET"])
 @require_role('patient', 'doctor', 'admin')
 def ai_assistant_history():
@@ -275,6 +401,9 @@ def ai_assistant_history():
                 "content": conv.message_content,
                 # 引用随消息一并返回，否则刷新页面后引用卡片就没了
                 "references": safe_json_loads(conv.references, []),
+                # Agent 轨迹同理：刷新页面后"推理过程"时间线要能恢复
+                "agent_trace": safe_json_loads(conv.agent_trace, []),
+                "context_patient_id": conv.context_patient_id,
                 "timestamp": conv.created_at.isoformat() if conv.created_at else None
             })
         
