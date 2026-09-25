@@ -2440,13 +2440,6 @@ const viewDoctor = (row) => {
   selectedDoctorDetail.value = row
   doctorDetailVisible.value = true
 }
-const disableDoctor = (row) => {
-  ElMessageBox.confirm(`确定要停用医生 ${row.full_name} 吗？`, '提示', {
-    confirmButtonText: '确定', cancelButtonText: '取消', type: 'warning'
-  }).then(() => {
-    ElMessage.success('医生已停用')
-  })
-}
 const viewPatient = (row) => {
   selectedPatientDetail.value = row
   patientDetailVisible.value = true
@@ -2555,8 +2548,6 @@ const confirmResetPassword = async () => {
     resettingPassword.value = false
   }
 }
-
-const saveConfig = () => { ElMessage.success('基础设置已保存') }
 
 // 数据生成工具相关方法
 const generateTestData = async () => {
@@ -2795,17 +2786,6 @@ const formatLogTime = (timestamp) => {
     }).replace(/\//g, '-')
   } catch (e) {
     return timestamp
-  }
-}
-
-// 模型训练相关方法
-const publishModel = async (model) => {
-  try {
-    await axios.post(`/api/models/${model.id}/publish`)
-    ElMessage.success('模型发布成功')
-    fetchTrainedModels()
-  } catch (err) {
-    ElMessage.error('发布失败')
   }
 }
 
@@ -3865,6 +3845,35 @@ watch(activeMenu, (newVal) => {
   }
 })
 
+/**
+ * ECharts 生命周期清理（阶段 12 补的）
+ *
+ * 改造前这里**只清了训练轮询定时器**：
+ *   - 7 个图表实例一个都没 dispose（每个持有 canvas、DOM 引用与内部监听）
+ *   - window 上的 resize 监听从未 removeEventListener，其回调闭包持有整个
+ *     组件作用域 —— 于是每进一次管理页就多留一份
+ * 症状是"不报错但越用越卡"，反复切换页面时内存只增不减。
+ *
+ * 这里先把泄漏堵上（不动渲染逻辑）。更彻底的做法是迁到
+ * `components/common/EChart.vue`：那个封装用 ResizeObserver 自动跟随容器尺寸
+ * （window.resize 抓不到侧边栏折叠、Tab 切换这类变化），并在 onUnmounted 里
+ * 自己断开观察 + dispose。迁移涉及 7 个图表与 11 处 setOption，需要浏览器
+ * 逐个确认渲染正常，因此与「拆巨型组件」一起留到前端重构那一轮。
+ *
+ * 注意：必须在**同一个**函数引用上移除监听 —— 用匿名箭头函数添加的监听
+ * 无法被 removeEventListener 移除，那正是原来那个监听能一直活着的原因。
+ */
+// 实例列表单一来源：resize 与卸载清理都读它。写成两处各列一遍，漏掉一个
+// 就是一个泄漏 —— 而漏掉的那一个不会报错，只在"页面越用越卡"里体现出来。
+const allCharts = () => [
+  classesChart, modelsChart, trendChart,
+  fractureTypeChart, ageChart, monthlyChart, genderChart,
+]
+
+const handleWindowResize = () => {
+  allCharts().forEach(chart => chart?.resize())
+}
+
 onMounted(() => {
   fetchAdminData()
   fetchTrainedModels()
@@ -3874,15 +3883,7 @@ onMounted(() => {
   loadAISettings()
 
   // 监听窗口大小变化，调整图表
-  window.addEventListener('resize', () => {
-    classesChart?.resize()
-    modelsChart?.resize()
-    trendChart?.resize()
-    fractureTypeChart?.resize()
-    ageChart?.resize()
-    monthlyChart?.resize()
-    genderChart?.resize()
-  })
+  window.addEventListener('resize', handleWindowResize)
 })
 
 onUnmounted(() => {
@@ -3891,6 +3892,13 @@ onUnmounted(() => {
     clearTimeout(progressTimer.value)
     progressTimer.value = null
   }
+  // 窗口监听与图表实例一并清理（见 handleWindowResize 上方的说明）
+  window.removeEventListener('resize', handleWindowResize)
+  for (const chart of allCharts()) {
+    chart?.dispose()
+  }
+  classesChart = modelsChart = trendChart = null
+  fractureTypeChart = ageChart = monthlyChart = genderChart = null
 })
 
 // 公告管理方法

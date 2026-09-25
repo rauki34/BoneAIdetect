@@ -270,7 +270,7 @@
 </template>
 
 <script setup>
-import axios from '../utils/axios'
+import * as detectionApi from '../api/detection'
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
@@ -363,7 +363,7 @@ const submitCreateReport = async () => {
   
   createReportLoading.value = true
   try {
-    await axios.post('/api/doctor/reports', {
+    await detectionApi.createReport({
       patient_id: reportForm.value.patient_id,
       detection_id: currentHistoryId.value,
       diagnosis: reportForm.value.diagnosis,
@@ -408,7 +408,7 @@ async function uploadFile() {
   fd.append('file', file.value)
   if (model.value) fd.append('model', model.value)
   try {
-    const res = await axios.post('/api/predict', fd, {
+    const res = await detectionApi.predict(fd, {
       headers: { 'Content-Type': 'multipart/form-data' }
     })
     result.value = res.data
@@ -523,7 +523,7 @@ async function submitInterpret() {
       }
     }
 
-    const res = await axios.post('/api/interpret', requestData, {
+    const res = await detectionApi.interpret(requestData, {
       timeout: 180000
     })
 
@@ -538,7 +538,7 @@ async function submitInterpret() {
       // 否则正文留着 [n] 角标却再也找不到对应来源）
       if (currentHistoryId.value) {
         try {
-          await axios.post(`/api/history/${currentHistoryId.value}/advice`, {
+          await detectionApi.saveAdvice(currentHistoryId.value, {
             interpretation: res.data.interpretation,
             references: interpretReferences.value,
             patient_info: patientInfo.value,
@@ -587,7 +587,7 @@ function getConfidenceColor(confidence) {
 
 onMounted(async () => {
   try {
-    const res = await axios.get('/api/settings')
+    const res = await detectionApi.settings()
     const modelsData = res.data.available_models || []
 
     // 只使用已发布的自定义模型（管理员发布的）

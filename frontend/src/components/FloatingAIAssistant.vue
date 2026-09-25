@@ -268,7 +268,7 @@ import {
   ArrowRight,
   Compass
 } from '@element-plus/icons-vue'
-import axios from '../utils/axios'
+import * as aiApi from '../api/ai'
 import CitationList from './CitationList.vue'
 
 const isOpen = ref(false)
@@ -384,9 +384,7 @@ const initSession = () => {
 // 加载聊天历史
 const loadChatHistory = async () => {
   try {
-    const response = await axios.get('/api/ai-assistant/history', {
-      params: { session_id: sessionId.value }
-    })
+    const response = await aiApi.history(sessionId.value)
     if (response.data.success && response.data.messages) {
       messages.value = response.data.messages.map(msg => ({
         role: msg.role,
@@ -427,16 +425,12 @@ const sendMessage = async () => {
     // 用默认值会在服务端已经成功返回 200 的情况下由浏览器先中断，
     // 用户看到的是"服务暂时不可用"，日志里却是一条成功的请求。
     // 深度分析更慢（多轮工具调用，实测 2 轮约 37-90s），所以再放宽一档。
+    // 超时由 api 层按接口给（普通问答 180s / Agent 300s），
+    // 调用点不必再各自记得传 —— 这正是收敛到接口层的收益之一
     const useAgent = agentMode.value
     const response = useAgent
-      ? await axios.post('/api/agent/chat', {
-          session_id: sessionId.value,
-          message: message
-        }, { timeout: 300000 })
-      : await axios.post('/api/ai-assistant/chat', {
-          session_id: sessionId.value,
-          message: message
-        }, { timeout: 180000 })
+      ? await aiApi.chatAgent(sessionId.value, message)
+      : await aiApi.chat(sessionId.value, message)
 
     readQuota(response)
 

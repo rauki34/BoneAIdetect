@@ -95,7 +95,7 @@
 
 <script setup>
 import { ref, watch } from 'vue'
-import axios from '../utils/axios'
+import * as patientApi from '../api/patient'
 import { formatDateTime } from '../utils/datetime'
 import { ElMessage } from 'element-plus'
 import { ArrowLeft } from '@element-plus/icons-vue'
@@ -121,7 +121,7 @@ const loadReportDetail = async (id) => {
   
   loading.value = true
   try {
-    const response = await axios.get(`/api/patient/reports/${id}`)
+    const response = await patientApi.patientReportDetail(id)
     report.value = response.data.report || null
   } catch (error) {
     console.error('加载报告详情失败:', error)

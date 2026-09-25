@@ -249,7 +249,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   Collection, Refresh, Upload, UploadFilled
 } from '@element-plus/icons-vue'
-import axios from '../utils/axios'
+import * as kbApi from '../api/knowledge'
 import PatientSelector from '../components/PatientSelector.vue'
 
 const loading = ref(false)
@@ -326,7 +326,7 @@ const loadDocs = async () => {
     const params = {}
     if (keyword.value) params.keyword = keyword.value
     if (statusFilter.value) params.status = statusFilter.value
-    const res = await axios.get('/api/knowledge/docs', { params })
+    const res = await kbApi.listDocs(params)
     if (res.data.success) {
       docs.value = res.data.data || []
       schedulePoll()
@@ -340,7 +340,7 @@ const loadDocs = async () => {
 
 const loadStats = async () => {
   try {
-    const res = await axios.get('/api/knowledge/stats')
+    const res = await kbApi.stats()
     if (res.data.success) stats.value = res.data.data
   } catch (e) {
     // 统计是附加信息，失败不打扰用户
@@ -374,7 +374,7 @@ const runSearch = async () => {
   searching.value = true
   searched.value = true
   try {
-    const res = await axios.post('/api/knowledge/search', {
+    const res = await kbApi.search({
       query, top_k: searchTopK.value
     }, { timeout: 120000 })
     if (res.data.success) {
@@ -394,7 +394,7 @@ const viewDoc = async (row) => {
   chunksLoading.value = true
   chunks.value = []
   try {
-    const res = await axios.get(`/api/knowledge/docs/${row.id}/chunks`)
+    const res = await kbApi.docChunks(row.id)
     if (res.data.success) chunks.value = res.data.data || []
   } catch (e) {
     ElMessage.error(e.response?.data?.error || '加载切片失败')
@@ -406,7 +406,7 @@ const viewDoc = async (row) => {
 const reingest = async (row) => {
   try {
     // 入库已异步化：这里只负责投递，切片数要等轮询到"就绪"才知道
-    const res = await axios.post(`/api/knowledge/docs/${row.id}/reingest`)
+    const res = await kbApi.reingestDoc(row.id)
     if (res.data.success) {
       ElMessage.success('已提交重新入库，正在后台处理')
       loadAll()
@@ -426,7 +426,7 @@ const removeDoc = async (row) => {
     return
   }
   try {
-    const res = await axios.delete(`/api/knowledge/docs/${row.id}`)
+    const res = await kbApi.removeDoc(row.id)
     if (res.data.success) {
       ElMessage.success('已删除')
       loadAll()
@@ -461,7 +461,7 @@ const submitUpload = async () => {
     })
     // 入库已异步化：端点只做校验、落盘、建 pending 行、投递，立刻返回。
     // 用默认 30s 超时就够，切片与向量化交给 Celery worker
-    const res = await axios.post('/api/knowledge/docs', form)
+    const res = await kbApi.uploadDoc(form)
     if (res.data.success) {
       if (res.data.skipped) {
         ElMessage.info('该文件内容未变，已存在，无需重复入库')

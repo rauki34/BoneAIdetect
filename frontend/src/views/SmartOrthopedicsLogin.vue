@@ -341,7 +341,7 @@ import { ElMessage } from 'element-plus'
 import {
   User, Lock, FirstAidKit, Check, ArrowRight, ArrowLeft
 } from '@element-plus/icons-vue'
-import axios from '../utils/axios'
+import * as authApi from '../api/auth'
 import { saveAuth } from '../utils/auth'
 import PatientRegisterDialog from '../components/PatientRegisterDialog.vue'
 import DoctorRegisterDialog from '../components/DoctorRegisterDialog.vue'
@@ -385,9 +385,7 @@ const selectPortal = (portal) => {
 // 加载验证码（登录表单与管理员弹窗共用）
 const loadCaptcha = async (idRef, imageRef, formObj) => {
   try {
-    const res = await axios.get('/api/captcha', {
-      responseType: 'blob'
-    })
+    const res = await authApi.captcha({ responseType: 'blob' })
     idRef.value = res.headers['x-captcha-id'] || ''
     const reader = new FileReader()
     reader.onload = () => {
@@ -423,7 +421,7 @@ const handleLogin = async () => {
         captcha_id: captchaId.value
       }
 
-      const res = await axios.post('/api/login', loginData)
+      const res = await authApi.login(loginData)
       
       if (res.data.success) {
         // 存储登录信息（access_token 为真实 JWT，由 utils/axios.js 注入请求头）
@@ -510,7 +508,7 @@ const handleAdminLogin = async () => {
     
     adminLoading.value = true
     try {
-      const res = await axios.post('/api/login', {
+      const res = await authApi.login({
         username: adminForm.username,
         password: adminForm.password,
         role: 'admin',
@@ -604,9 +602,7 @@ const resetRules = {
 // 刷新忘记密码验证码
 const refreshForgotCaptcha = async () => {
   try {
-    const res = await axios.get('/api/captcha', {
-      responseType: 'blob'
-    })
+    const res = await authApi.captcha({ responseType: 'blob' })
     forgotCaptchaId.value = res.headers['x-captcha-id'] || ''
     const reader = new FileReader()
     reader.onload = () => {
@@ -626,7 +622,7 @@ const verifyIdentity = async () => {
     if (!valid) return
     forgotLoading.value = true
     try {
-      const res = await axios.post('/api/forgot-password/verify', {
+      const res = await authApi.verifyReset({
         username: forgotForm.username,
         phone: forgotForm.phone,
         captcha: forgotForm.captcha,
@@ -652,7 +648,7 @@ const resetPassword = async () => {
     if (!valid) return
     resetLoading.value = true
     try {
-      const res = await axios.post('/api/forgot-password/reset', {
+      const res = await authApi.resetPassword({
         username: forgotForm.username,
         new_password: resetForm.newPassword
       })

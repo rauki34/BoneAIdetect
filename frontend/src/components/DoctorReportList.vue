@@ -197,7 +197,7 @@
 
 <script setup>
 import { ref, onMounted } from 'vue'
-import axios from '../utils/axios'
+import * as doctorApi from '../api/doctor'
 import { formatDateTime } from '../utils/datetime'
 import { ElMessage } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
@@ -232,7 +232,7 @@ const loadReports = async () => {
       params.date_to = filters.value.date_to
     }
     
-    const response = await axios.get('/api/doctor/reports', { params })
+    const response = await doctorApi.reports(params)
     reports.value = response.data.data || []
   } catch (error) {
     console.error('加载报告列表失败:', error)

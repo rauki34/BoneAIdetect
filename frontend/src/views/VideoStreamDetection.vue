@@ -180,7 +180,7 @@
 <script setup>
 import { ref, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
-import axios from '../utils/axios'
+import * as detectionApi from '../api/detection'
 import { ElMessage } from 'element-plus'
 import { Loading, ArrowLeft } from '@element-plus/icons-vue'
 
@@ -214,7 +214,7 @@ let wsReconnectTimer = null
 /* 加载可用模型 */
 onMounted(async () => {
   try {
-    const res = await axios.get('/api/settings')
+    const res = await detectionApi.settings()
     const modelsData = res.data.available_models || []
 
     // 只使用已发布的自定义模型（管理员发布的）
@@ -290,7 +290,7 @@ async function startDetection() {
     formData.append('model', model.value)
 
     // 发送视频文件到后端
-    const res = await axios.post('/api/video/detect', formData, {
+    const res = await detectionApi.videoDetect(formData, {
       headers: { 'Content-Type': 'multipart/form-data' }
     })
 

@@ -145,7 +145,8 @@
 import { ref, reactive, computed, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { MagicStick } from '@element-plus/icons-vue'
-import axios from '../utils/axios'
+import * as authApi from '../api/auth'
+import * as patientApi from '../api/patient'
 
 const props = defineProps({
   modelValue: {
@@ -185,7 +186,7 @@ const captchaImage = ref('')
 
 const refreshCaptcha = async () => {
   try {
-    const res = await axios.get('/api/captcha', { responseType: 'blob' })
+    const res = await authApi.captcha({ responseType: 'blob' })
     captchaId.value = res.headers['x-captcha-id'] || ''
     const reader = new FileReader()
     reader.onload = () => { captchaImage.value = reader.result }
@@ -319,7 +320,7 @@ const submitApplication = async () => {
 
     loading.value = true
     try {
-      const res = await axios.post('/api/doctor/register', {
+      const res = await patientApi.registerDoctor({
         username: form.username,
         password: form.password,
         full_name: form.fullName,

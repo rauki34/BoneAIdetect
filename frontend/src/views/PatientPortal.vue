@@ -913,6 +913,10 @@ const renderMarkdownToHtml = (markdown) => {
   html = html.replace(/^\s*---?\s*$/gim, '')
 
   // 恢复代码块
+  // 哨兵字符用 \x00 是**刻意**的：正文里几乎不可能出现它，所以拿它当占位符
+  // 不会误伤真实内容（换行、星号、方括号都可能在正文里出现）。因此这里豁免
+  // no-control-regex —— 这条规则针对的是"不小心写进控制字符"，而这里是设计。
+  // eslint-disable-next-line no-control-regex
   html = html.replace(/\x00CODE(\d+)\x00/g, (match, index) => {
     const code = codeBlocks[parseInt(index)].replace(/```([\s\S]*?)```/, '$1')
     return `<pre style="background: #f4f4f4; padding: 10px; border-radius: 4px; overflow-x: auto; margin: 10px 0;"><code>${code}</code></pre>`

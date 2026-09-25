@@ -163,7 +163,7 @@
 
 <script setup>
 import { ref, onMounted } from 'vue'
-import axios from '../utils/axios'
+import * as patientApi from '../api/patient'
 import { formatDate, formatDateTime } from '../utils/datetime'
 import { ElMessage } from 'element-plus'
 import { Refresh, Grid, List, View, UserFilled, Clock } from '@element-plus/icons-vue'
@@ -179,7 +179,7 @@ const viewMode = ref('card') // 'card' or 'table'
 const loadReports = async () => {
   loading.value = true
   try {
-    const response = await axios.get('/api/patient/reports')
+    const response = await patientApi.patientReports()
     reports.value = response.data.data || []
   } catch (error) {
     console.error('加载报告列表失败:', error)

@@ -28,7 +28,7 @@
 
 <script setup>
 import { ref, onMounted } from 'vue'
-import axios from '../utils/axios'
+import * as patientApi from '../api/patient'
 import { ElMessage } from 'element-plus'
 
 const props = defineProps({
@@ -53,7 +53,7 @@ const searchPatients = async (query) => {
   
   loading.value = true
   try {
-    const response = await axios.get('/api/doctor/patients', {
+    const response = await patientApi.doctorPatients({
       params: { search: query }
     })
     patients.value = response.data.data || []
@@ -69,7 +69,7 @@ const searchPatients = async (query) => {
 const loadPatients = async () => {
   loading.value = true
   try {
-    const response = await axios.get('/api/doctor/patients')
+    const response = await patientApi.doctorPatients()
     patients.value = response.data.data || []
   } catch (error) {
     console.error('加载患者列表失败:', error)

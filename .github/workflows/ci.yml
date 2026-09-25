@@ -34,3 +34,31 @@ jobs:
       # 说明：tests/integration 需要完整应用与数据库，且会加载 YOLO 权重，
       # 不在 CI 里跑（见 requirements-ci.txt 的注释）。RAG、Agent 真实编排、
       # 检测链路的验收由 scripts/verify_*.py 在本机执行。
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 静态检查（只查"代码跑不起来"这一类）
+        run: npx eslint src
+
+      - name: 构建（编译期错误在这里暴露）
+        run: npm run build
+
+      # ⚠️ 前端**没有自动化测试**也没有浏览器自动化（见 BASELINE 阶段 12）：
+      # 这一层能保证编译与静态契约，保证不了"页面点起来是对的"。
+      # 真正的验收是人工点一遍，命令：npm run dev + 按验收清单逐项过。

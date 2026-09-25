@@ -65,7 +65,7 @@
 
 <script setup>
 import { ref, watch } from 'vue'
-import axios from '../utils/axios'
+import * as doctorApi from '../api/doctor'
 import { ElMessage } from 'element-plus'
 import { formatDateTime } from '../utils/datetime'
 
@@ -121,7 +121,7 @@ const handleSubmit = async () => {
   
   loading.value = true
   try {
-    await axios.put(`/api/doctor/reports/${props.report.id}`, {
+    await doctorApi.updateReport(props.report.id, {
       diagnosis: form.value.diagnosis,
       follow_up_notes: form.value.follow_up_notes
     })

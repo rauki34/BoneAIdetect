@@ -221,7 +221,7 @@
 <script setup>
 import { ref, onMounted, onUnmounted, computed, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
-import axios from '../utils/axios'
+import * as detectionApi from '../api/detection'
 import { ElMessage } from 'element-plus'
 import { VideoCamera, VideoCameraFilled, Loading, Refresh, ArrowLeft } from '@element-plus/icons-vue'
 
@@ -274,7 +274,7 @@ const stats = computed(() => {
 /* 加载可用模型和摄像头 */
 onMounted(async () => {
   try {
-    const res = await axios.get('/api/settings')
+    const res = await detectionApi.settings()
     const modelsData = res.data.available_models || []
 
     // 只使用已发布的自定义模型（管理员发布的）
@@ -478,7 +478,7 @@ async function detectFrame() {
   const imageData = canvas.toDataURL('image/jpeg', 0.8)
 
   try {
-    const res = await axios.post('/api/camera/detect', {
+    const res = await detectionApi.cameraDetect({
       image: imageData,
       model: model.value
     })
