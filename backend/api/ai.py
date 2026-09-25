@@ -8,6 +8,7 @@ from flask import Blueprint, Response, current_app, jsonify, request
 from sqlalchemy import func
 
 from core.auth import get_current_user, require_auth, require_role
+from core.helpers import can_access_patient
 from core.ratelimit import limit
 from database import db, AIConversation, safe_json_loads
 from services.ai_service import (
@@ -18,6 +19,46 @@ from services.llm_client import LLMError
 from utils.logger import logger
 
 bp = Blueprint('ai', __name__)
+
+
+def _resolve_request_patient(user, data):
+    """解析请求里的 patient_id，返回 (patient_id, include_personal, error)
+
+    error 非 None 时调用方原样返回它（已含状态码）。
+
+    此前本文件 9 处一律写死 `patient_id=user.id`，而那一列的语义是
+    **会话归属人**；于是医生登录时医生 id 被当成患者 id 用来检索"个人病历"，
+    医生永远看不到绑定患者的病历，而 `can_access_patient` 在本文件从未被调用。
+    现在把「会话归属人」与「本次检索的主体患者」分开：
+
+    - 患者：不传 → 自己 + 含个人切片（**与改造前逐字一致**）；传别人 → 403
+    - 医生/管理员：不传 → (None, False)，只查共享库（不再拿自身 id 当患者 id，
+      也不强制必填 —— 纯医学知识问题本就无需患者上下文）；传了 → 必须过
+      can_access_patient
+    """
+    raw = (data or {}).get('patient_id')
+    if raw in (None, '', 0):
+        if user.role == 'patient':
+            return user.id, True, None
+        return None, False, None
+    try:
+        pid = int(raw)
+    except (TypeError, ValueError):
+        return None, False, (jsonify({
+            'success': False,
+            'error': 'patient_id 必须是整数',
+            'error_code': 'VALIDATION_001',
+        }), 400)
+    if not can_access_patient(user, pid):
+        # 角色合法但无权访问该患者的数据，与 AUTH_002（角色门禁）区分开
+        logger.warning('用户 %s(%s) 尝试访问无权查看的患者 %s 的对话上下文',
+                       user.username, user.role, pid)
+        return None, False, (jsonify({
+            'success': False,
+            'error': '无权访问该患者的数据',
+            'error_code': 'AUTH_003',
+        }), 403)
+    return pid, True, None
 
 @bp.route("/api/ai-assistant/chat/stream", methods=["POST"])
 @limit('ai_chat', key='user')   # AI 调用按用户限流：token 计费，成本归属需清晰
@@ -45,7 +86,11 @@ def ai_assistant_chat_stream():
         return jsonify({"success": False, "error": "消息内容不能为空"}), 400
 
     user = get_current_user()
-    user_id = user.id
+    user_id = user.id                 # 会话归属人，不是检索主体
+
+    subject_id, include_personal, err = _resolve_request_patient(user, data)
+    if err:
+        return err
 
     # 用户消息先落库，保证即使流式中断也不丢失提问
     db.session.add(AIConversation(
@@ -58,7 +103,7 @@ def ai_assistant_chat_stream():
 
     # RAG 检索必须在视图内完成：生成器在请求上下文之外执行
     rag_context, references = build_rag_context(
-        message, patient_id=user_id, include_personal=True,
+        message, patient_id=subject_id, include_personal=include_personal,
     )
     messages = _build_assistant_messages(
         user_id, session_id, rag_context=rag_context, question=message,
@@ -134,7 +179,11 @@ def ai_assistant_chat():
         return jsonify({"success": False, "error": "消息内容不能为空"}), 400
     
     user = get_current_user()
-    
+
+    subject_id, include_personal, err = _resolve_request_patient(user, data)
+    if err:
+        return err
+
     try:
         # 保存用户消息到数据库
         user_msg = AIConversation(
@@ -145,11 +194,11 @@ def ai_assistant_chat():
         )
         db.session.add(user_msg)
         db.session.commit()
-        
-        # RAG：检索共享知识库 + 该患者本人病历。
+
+        # RAG：检索共享知识库 + 主体患者的个人病历。
         # 检索失败返回 ('', [])，对话退回无参考资料的回答，不会因此不可用。
         rag_context, references = build_rag_context(
-            message, patient_id=user.id, include_personal=True,
+            message, patient_id=subject_id, include_personal=include_personal,
         )
 
         # 构建消息历史（系统提示词 + RAG 参考资料 + 最近 10 条上下文）
