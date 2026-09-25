@@ -15,6 +15,7 @@ import re
 import sys
 import time
 import pathlib
+import threading
 
 import requests
 
@@ -56,6 +57,44 @@ def login(user, attempts=10):
     raise SystemExit('登录失败')
 
 
+class ProgressSampler(threading.Thread):
+    """从**投递那一刻**起持续采样任务进度。
+
+    为什么不能在 [2] 之后才开始轮询：1-epoch 的小数据集几秒就跑完，而 [2] 的
+    响应性测量本身要花约 6.5 秒（6 次请求 + 每次 sleep 1 秒）。观测定点晚于
+    训练窗口，第 [3] 段就只会看到 completed，把"没观测到"误判成"没写回 DB"。
+    真正要断言的是「存在某一刻 status=running 且 0 < progress」，所以采样必须
+    与训练同时开始 —— 这一点在阶段 8 假失败过两次（改小轮询间隔治不了，
+    因为问题不在间隔而在起点）。
+    """
+
+    def __init__(self, task_id, H, interval=0.4):
+        super().__init__(daemon=True)
+        self.task_id, self.H, self.interval = task_id, H, interval
+        self.saw_progress = False
+        self.last = None
+        self.stopped = threading.Event()
+
+    def run(self):
+        while not self.stopped.is_set():
+            try:
+                self.last = requests.get(
+                    f'{BASE}/api/training/tasks/{self.task_id}/progress',
+                    headers=self.H, timeout=10).json()
+            except Exception:
+                time.sleep(self.interval)
+                continue
+            d = self.last
+            if d.get('status') == 'running' and (d.get('progress') or 0) > 0:
+                self.saw_progress = True
+            if d.get('status') in ('completed', 'failed', 'stopped'):
+                return
+            time.sleep(self.interval)
+
+    def terminal(self):
+        return (self.last or {}).get('status') in ('completed', 'failed', 'stopped')
+
+
 def main():
     H = {'Authorization': 'Bearer ' + login('admin')}
 
@@ -82,6 +121,11 @@ def main():
     model_id = r.json()['model_id']
     print(f'   task_id={task_id} model_id={model_id}')
 
+    # 采样必须在投递后立刻开始：[2] 的响应性测量要花约 6.5 秒，等它跑完再采样
+    # 就已经错过 1-epoch 任务的整个 running 窗口了
+    sampler = ProgressSampler(task_id, H)
+    sampler.start()
+
     # ---------- 2. 训练执行期间，Web 进程必须仍然可用 ----------
     print('\n[2] 训练执行期间 Web 进程的响应性')
     lat = []
@@ -96,25 +140,15 @@ def main():
 
     # ---------- 3. 等训练结束 ----------
     print('\n[3] 等待训练完成')
-    status, progress, last = None, 0, None
-    saw_progress = False
     deadline = time.time() + 900
-    while time.time() < deadline:
-        rr = requests.get(f'{BASE}/api/training/tasks/{task_id}/progress',
-                          headers=H, timeout=10)
-        d = rr.json()
-        status = d.get('status')
-        progress = d.get('progress') or 0
-        if status == 'running' and progress > 0:
-            saw_progress = True
-        last = d
-        if status in ('completed', 'failed', 'stopped'):
-            break
-        # 0.5 秒而不是 3 秒：1-epoch 的小数据集几秒就跑完，轮询太慢会
-        # 整个错过 running 窗口，把"没观测到"误判成"没写入"
+    while time.time() < deadline and not sampler.terminal():
         time.sleep(0.5)
+    sampler.stopped.set()
+    last = sampler.last or {}
+    status = last.get('status')
+    progress = last.get('progress') or 0
     check('任务到达终态', status in ('completed', 'failed', 'stopped'), f'状态={status}')
-    check('训练过程中进度被写回 DB', saw_progress, f'最后 progress={progress}')
+    check('训练过程中进度被写回 DB', sampler.saw_progress, f'最后 progress={progress}')
     check('任务成功完成', status == 'completed', f'状态={status} 详情={last}')
 
     # ---------- 4. 训练日志文件 ----------
