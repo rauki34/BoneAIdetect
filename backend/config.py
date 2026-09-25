@@ -109,6 +109,19 @@ class Config:
     RATE_LIMIT_AI = int(_env('RATE_LIMIT_AI', 10))            # AI 对话：次/分钟
     RATE_LIMIT_GENERAL = int(_env('RATE_LIMIT_GENERAL', 100))  # 通用：次/分钟
 
+    # ---------- 额度（阶段 9）----------
+    # 分钟级限流只约束"多快"，约束不了"总量"：一次 Agent 请求最坏触发 5 次
+    # LLM 调用，按 5 次/分钟放行等于一小时能烧 25 次推演。所以要另一个尺度。
+    # 语义与实现见 core/quota.py。
+    QUOTA_ENABLED = _env('QUOTA_ENABLED', 'true').lower() == 'true'
+    # 单个会话的对话轮数上限（新建会话即重置）
+    QUOTA_SESSION_MAX = int(_env('QUOTA_SESSION_MAX', 30))
+    # 单用户每日对话次数上限；日期边界用**本地日期**（不是 UTC，见 quota.py）
+    QUOTA_DAILY_PER_USER = int(_env('QUOTA_DAILY_PER_USER', 100))
+    QUOTA_SESSION_TTL = int(_env('QUOTA_SESSION_TTL', 604800))   # 会话计数保留 7 天
+    # 豁免额度的角色（与 RATE_LIMIT_BYPASS_ROLES 同义；压测时可临时用 admin 账号）
+    QUOTA_BYPASS_ROLES = _env('QUOTA_BYPASS_ROLES', 'admin').split(',')
+
     # 是否信任反向代理传来的 X-Forwarded-For。
     # 直连部署时必须保持 False —— 该头可被客户端伪造，
     # 信任它会让攻击者通过伪造 IP 绕过限流。

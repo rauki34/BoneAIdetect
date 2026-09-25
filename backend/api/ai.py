@@ -8,6 +8,7 @@ from flask import Blueprint, Response, current_app, jsonify, request
 from sqlalchemy import func
 
 from core.auth import get_current_user, require_auth, require_role
+from core import quota
 from core.helpers import can_access_patient
 from core.ratelimit import limit
 from database import db, AIConversation, safe_json_loads
@@ -92,6 +93,13 @@ def ai_assistant_chat_stream():
     if err:
         return err
 
+    # 额度在准入时消费（解析完 session_id 之后、调 LLM 之前，否则等于先烧钱再拒绝）
+    qr = None
+    if not quota.is_exempt(user):
+        qr = quota.check_and_consume(user.id, session_id)
+        if not qr.allowed:
+            return quota.denial_response(qr)
+
     # 用户消息先落库，保证即使流式中断也不丢失提问
     db.session.add(AIConversation(
         patient_id=user_id,
@@ -154,11 +162,13 @@ def ai_assistant_chat_stream():
                 yield f'data: {json.dumps({"references": references}, ensure_ascii=False)}\n\n'
             yield 'data: [DONE]\n\n'
 
-    return Response(
+    resp = Response(
         generate(),
         mimetype='text/event-stream',
         headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'},
     )
+    # 额度信息只能靠响应头带给前端（SSE 已开始发送后改不了状态码）
+    return quota.attach_headers(resp, qr) if qr else resp
 
 @bp.route("/api/ai-assistant/chat", methods=["POST"])
 @limit('ai_chat', key='user')   # AI 调用按用户限流
@@ -183,6 +193,13 @@ def ai_assistant_chat():
     subject_id, include_personal, err = _resolve_request_patient(user, data)
     if err:
         return err
+
+    # 额度在准入时消费（解析完 session_id 之后、调 LLM 之前）
+    qr = None
+    if not quota.is_exempt(user):
+        qr = quota.check_and_consume(user.id, session_id)
+        if not qr.allowed:
+            return quota.denial_response(qr)
 
     try:
         # 保存用户消息到数据库
@@ -220,12 +237,13 @@ def ai_assistant_chat():
         db.session.add(ai_msg)
         db.session.commit()
 
-        return jsonify({
+        resp = jsonify({
             "success": True,
             "reply": reply,
             "references": references,
             "session_id": session_id
         })
+        return quota.attach_headers(resp, qr) if qr else resp
 
     except Exception as e:
         db.session.rollback()

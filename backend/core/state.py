@@ -95,6 +95,20 @@ RATE_LIMIT_CONFIG = {
         'max_requests': _env_int('RATE_LIMIT_KB_SEARCH', 60),
         'time_window': 60,
     },
+    'agent_chat': {               # Agent 对话：一次请求最坏触发 5 次 LLM 调用，
+        'max_requests': _env_int('RATE_LIMIT_AGENT_CHAT', 5),   # 等成本下取 ai_chat 的一半
+        'time_window': 60,
+    },
+}
+
+
+# 额度配置（阶段 9）：分钟级限流之外的两个时间尺度 —— 单会话轮数与每日总量。
+# 语义与实现见 core/quota.py（那里解释了为什么必须另起一层）
+QUOTA_CONFIG = {
+    'enabled': os.environ.get('QUOTA_ENABLED', 'true').lower() == 'true',
+    'session_max': _env_int('QUOTA_SESSION_MAX', 30),
+    'daily_max': _env_int('QUOTA_DAILY_PER_USER', 100),
+    'session_ttl': _env_int('QUOTA_SESSION_TTL', 604800),      # 7 天
 }
 
 # ---------- 视频流 ----------
