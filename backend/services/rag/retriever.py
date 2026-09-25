@@ -128,6 +128,17 @@ class RetrievalScope:
                 f'shared={self.include_shared} personal={self.include_personal}>')
 
 
+def breaker_open():
+    """检索断路器是否处于打开状态（只读，不改变任何既有行为）
+
+    存在的理由：`retrieve_safely()` 在两种完全不同的情况下都返回 `[]` ——
+    「服务/模型挂了（断路器打开）」与「知识库确实没有这条」。调用方若不加
+    区分，就会把前者告诉用户成"没有相关资料"，而那是在为一次故障撒谎。
+    Agent 工具据此分别返回 unsupported 与 not_found（阶段 9）。
+    """
+    return time.time() < _retrieve_failure_until
+
+
 def shared_scope():
     """只检索共享知识库（医生/管理员默认）"""
     return RetrievalScope()

@@ -100,6 +100,45 @@ class Config:
     # 它限制的是 HTTP 请求体大小，与入库同步还是异步无关
     RAG_MAX_UPLOAD_MB = int(_env('RAG_MAX_UPLOAD_MB', 50))
 
+    # ---------- Agent 康复助手（阶段 9）----------
+    # 总开关：关掉即退回"普通对话"路径（与 /api/ai-assistant/chat 行为一致），
+    # 响应里 degraded=true 说明原因。演示、排障、成本失控时的一键回退。
+    AGENT_ENABLED = _env('AGENT_ENABLED', 'true').lower() == 'true'
+    # LLM 轮次上限。5 轮足够"查档案→查报告→查指南→作答"，
+    # 再多 token 成本非线性上升（每轮都要重发完整上下文）
+    AGENT_MAX_ITERATIONS = int(_env('AGENT_MAX_ITERATIONS', 5))
+    # 工具调用总数上限。实测模型会在一轮里**并行**发多个 tool_calls，
+    # 只靠轮次拦不住总量
+    AGENT_MAX_TOOL_CALLS = int(_env('AGENT_MAX_TOOL_CALLS', 8))
+    # 整条编排的墙钟预算（秒）。既有实测单次回答 38-45s（见 api/ai.py 的注释），
+    # 3 轮约 120-150s；前端 axios 需要相应放宽超时
+    AGENT_TIMEOUT_SECONDS = int(_env('AGENT_TIMEOUT_SECONDS', 150))
+    # 单次 LLM 调用的超时上限；实际取 min(它, 剩余预算)。
+    # modelscope provider 默认 120s 对 agent 太长（一轮失败就吃光整条预算）
+    AGENT_LLM_TIMEOUT = int(_env('AGENT_LLM_TIMEOUT', 60))
+    # 单次生成上限。agent 每轮输出的是 tool_calls 或短答，800 够；
+    # 实测终答较长（500 会被 finish_reason=length 截断）
+    AGENT_MAX_TOKENS = int(_env('AGENT_MAX_TOKENS', 800))
+    # 单个工具结果进 prompt 的字符上限（多轮 × 无限长病历会打爆上下文）
+    AGENT_TOOL_RESULT_MAX_CHARS = int(_env('AGENT_TOOL_RESULT_MAX_CHARS', 4000))
+    # 执行轨迹落库上限；超出则只保留 summary
+    AGENT_TRACE_MAX_CHARS = int(_env('AGENT_TRACE_MAX_CHARS', 20000))
+    # 用户单条输入上限（防超长输入烧 token）
+    AGENT_MAX_QUESTION_CHARS = int(_env('AGENT_MAX_QUESTION_CHARS', 2000))
+    # agent 内检索条数。比 RAG_TOP_K 小，因为工具结果还要叠加进上下文
+    AGENT_RAG_TOP_K = int(_env('AGENT_RAG_TOP_K', 4))
+    # 上下文 token 预算与压缩后至少保留的原文条数（Memory 三层压缩）
+    AGENT_CONTEXT_TOKEN_BUDGET = int(_env('AGENT_CONTEXT_TOKEN_BUDGET', 3000))
+    AGENT_KEEP_RECENT_MESSAGES = int(_env('AGENT_KEEP_RECENT_MESSAGES', 6))
+    # 会话摘要（Memory 第 2/3 层，存 Redis 跨进程）。跑一次摘要 = 一次额外
+    # LLM 调用 + 2-5 秒，所以只在长会话里触发
+    AGENT_SUMMARY_ENABLED = _env('AGENT_SUMMARY_ENABLED', 'true').lower() == 'true'
+    AGENT_SUMMARY_MIN_MESSAGES = int(_env('AGENT_SUMMARY_MIN_MESSAGES', 20))
+    AGENT_SUMMARY_TTL = int(_env('AGENT_SUMMARY_TTL', 604800))     # 7 天
+    # 空 = 用 provider 自带的能力标志；显式 true/false 可覆盖
+    # （custom provider 默认不支持 function calling）
+    AGENT_PROVIDER_SUPPORTS_TOOLS = _env('AGENT_PROVIDER_SUPPORTS_TOOLS', '')
+
     # ---------- Celery（阶段 8）----------
     # worker 与后端是两个进程，各自独立读环境变量
     CELERY_BROKER_URL = _env('CELERY_BROKER_URL', 'redis://127.0.0.1:6379/1')
