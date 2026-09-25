@@ -137,6 +137,8 @@ python scripts/ingest_knowledge.py --apply         # index the corpus
 
 Then: `cd frontend && npm install && npm run dev` for the UI.
 
+The `AI/` local model service is optional — the platform works without it (pick a remote provider in settings instead). To run it: `cd AI && pip install -r requirements.txt && python app.py`, which serves on `:8000`. Setup details are in `AI服务配置说明.md`.
+
 ---
 
 ## Verification
@@ -145,7 +147,7 @@ Everything below runs against a live stack. Suites are grouped by concern, and e
 
 ```bash
 cd backend
-python -m pytest tests -q                                       # 84 tests, ~6 s, no models needed
+python -m pytest tests -q                                       # 85 tests, ~6 s, no models needed
 
 python scripts/verify_auth_flow.py logs/app.log                 # 21  auth, captcha, role isolation
 python scripts/verify_knowledge_api.py logs/app.log             # 23  knowledge API contract

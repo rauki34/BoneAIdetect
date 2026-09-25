@@ -137,6 +137,8 @@ python scripts/ingest_knowledge.py --apply         # 实际入库
 
 界面：`cd frontend && npm install && npm run dev`。
 
+`AI/` 本地模型服务是可选的 —— 不起它平台照常工作（在设置里改选远程提供商即可）。要跑它：`cd AI && pip install -r requirements.txt && python app.py`，监听 `:8000`。配置细节见 `AI服务配置说明.md`。
+
 ---
 
 ## 验证
@@ -145,7 +147,7 @@ python scripts/ingest_knowledge.py --apply         # 实际入库
 
 ```bash
 cd backend
-python -m pytest tests -q                                       # 84 条，约 6 秒，不依赖模型
+python -m pytest tests -q                                       # 85 条，约 6 秒，不依赖模型
 
 python scripts/verify_auth_flow.py logs/app.log                 # 21  认证、验证码、角色隔离
 python scripts/verify_knowledge_api.py logs/app.log             # 23  知识库接口契约
