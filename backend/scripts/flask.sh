@@ -148,10 +148,16 @@ case "${1:-}" in
       echo "运行中 (PID $pid)"
       owner=$(port_owner)
       [ -n "$owner" ] && echo "监听 $PORT: PID $owner"
+    elif owner=$(port_owner) && [ -n "$owner" ]; then
+      # pidfile 死了但端口在服务：**后端其实是好的**。
+      # 本机 venv 的解释器是个 shim，会 re-exec 基础解释器（celery.sh 为同一个
+      # 坑改成了扫描命令行），Werkzeug 的 reloader 还会重启子进程换 PID ——
+      # 两者都会让 pidfile 里的 PID 先退出。此时报"未运行"是错的：
+      # 按记忆里的流程"先查四个组件 status 再跑验证脚本"，会被误导去重启一个
+      # 正在正常服务的后端。
+      echo "运行中 (按端口 $PORT 判断，PID $owner；pidfile 已失效)"
     else
-      echo "未运行 (pidfile 无记录或进程已退出)"
-      owner=$(port_owner)
-      [ -n "$owner" ] && echo "⚠️  但端口 $PORT 被 PID $owner 占用"
+      echo "未运行 (pidfile 无记录，端口 $PORT 也无人监听)"
     fi
     ;;
   log)
