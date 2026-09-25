@@ -2018,10 +2018,12 @@ const datasetEditForm = reactive({
   name: '',
   description: ''
 })
+// el-upload 用的是自己的 XHR，不经过 utils/axios 的拦截器，
+// 所以这里必须显式带 JWT —— 以前这里传的是 X-Username（无签名校验的过渡期
+// 认证方式，已于阶段 11 移除）。后端现在只认 JWT，忘带就是 401。
 const datasetUploadHeaders = computed(() => {
-  return {
-    'X-Username': localStorage.getItem('username') || ''
-  }
+  const token = localStorage.getItem('access_token')
+  return token ? { Authorization: `Bearer ${token}` } : {}
 })
 
 // 检测系统相关数据

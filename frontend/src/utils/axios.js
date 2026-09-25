@@ -36,12 +36,6 @@ instance.interceptors.request.use(
       config.headers['Authorization'] = `Bearer ${accessToken}`
     }
 
-    // 过渡期的认证方式，阶段 3 完成后移除
-    const username = localStorage.getItem('username')
-    if (username) {
-      config.headers['X-Username'] = username
-    }
-
     return config
   },
   error => {

@@ -20,7 +20,9 @@ bp = Blueprint('patient', __name__)
 @require_auth
 def get_user_ai_models():
     """获取当前用户的AI模型配置列表"""
-    username = request.headers.get('X-Username', 'unknown')
+    # 过滤键必须来自已认证身份：这里曾读 X-Username，于是任何登录用户
+    # 换个请求头就能列出别人的 AI 模型配置（越权读取）
+    username = get_current_user().username
     provider = request.args.get('provider', '')
     
     query = UserAIModel.query.filter_by(created_by=username)

@@ -325,7 +325,7 @@ def train_model():
     except Exception as e:
         return jsonify({"error": f"参数解析错误: {str(e)}"}), 400
 
-    username = request.headers.get('X-Username') or 'anonymous'
+    username = get_current_user().username   # 检测记录归属：不能由请求头自称
 
     if not model_name:
         return jsonify({"error": "模型名称不能为空"}), 400

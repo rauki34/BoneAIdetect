@@ -51,8 +51,12 @@ def log_operation(description, success=True, error_msg=None, username=None):
     try:
         # 获取请求上下文中的信息
         try:
-            username = username or (
-                request.headers.get('X-Username', 'anonymous') if request else 'system')
+            # 操作人取**已认证身份**，不读请求头：X-Username 无签名校验，
+            # 用它记审计等于让调用方自己填"谁干的"（可以冒名）。
+            if not username:
+                from core.auth import get_current_user   # 延迟导入：core.auth 反向依赖本模块
+                user = get_current_user()
+                username = user.username if user else 'anonymous'
             method = request.method if request else 'SYSTEM'
             url = request.path if request else ''
             ip = request.remote_addr if request else ''

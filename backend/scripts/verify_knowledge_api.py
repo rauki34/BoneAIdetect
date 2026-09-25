@@ -262,7 +262,10 @@ def main():
             check('文档列表返回共享语料', len(data) > 0, f'{len(data)} 篇')
 
     if need('admin', '管理员访问知识库统计'):
-        r = requests.get(f'{BASE}/api/knowledge/stats', headers=auth(TOKENS['admin']), timeout=15)
+        # 超时给足：这个接口会调 Embedder.instance()，**冷进程下首次调用实测 23 秒**
+        # （加载 bge-m3），第二次 0.0s。原来写 15s，于是只要后端刚重启这条就必然失败
+        # —— 与 BASELINE 二·补六 第 1 条（客户端超时把成功的请求判成失败）同一类。
+        r = requests.get(f'{BASE}/api/knowledge/stats', headers=auth(TOKENS['admin']), timeout=60)
         ok = r.status_code == 200
         check('管理员访问知识库统计 → 200', ok, f'HTTP {r.status_code}')
         if ok:

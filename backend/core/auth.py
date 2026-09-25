@@ -1,7 +1,16 @@
 """认证与权限装饰器
 
-从 app.py 抽出。当前为 JWT + X-Username 双模式过渡期实现，
-全量切换后移除兜底分支。
+**只认 JWT**（阶段 3 引入，过渡期的 X-Username 兜底已于 2026-09-25 移除）。
+
+那段兜底曾经是必要的：改造期间前端还有页面没换成 JWT，留着它才能灰度切换。
+代价是 `curl -H "X-Username: admin"` 就能冒充任何人 —— 所以它必须有个删除期限，
+而"等全量切换后删除"这种说法**没有期限**，于是它活了两个阶段（见
+BASELINE 二·补九 第 8 条：`TODO` 不写日期就等于不写）。
+
+移除时顺带发现另外 5 处**直接读这个请求头**的地方（审计日志的操作人、
+`/api/user-ai-models` 的数据过滤键、检测/训练记录的归属），它们比认证兜底更隐蔽：
+即使认证改成了 JWT，那些地方仍然让调用方自己声明"我是谁"。现已统一改为
+`get_current_user()`。
 """
 from datetime import datetime
 from functools import wraps
@@ -16,19 +25,13 @@ from utils.logger import logger
 # ==================== 权限验证装饰器 ====================
 
 def get_current_user():
-    """获取当前登录用户
+    """获取当前登录用户（JWT）
 
-    过渡期采用**双模式**认证，新旧并存以便灰度切换：
-      1. JWT（Authorization: Bearer <token>）—— 新方式，有签名校验
-      2. X-Username 请求头 —— 旧方式，**无任何校验，可被任意伪造**
-
-    旧方式仅用于兼容尚未升级的客户端，会打出 WARNING 日志。
-    待观察期内不再出现该日志后，删除下方"方式二"分支。
+    `optional=True`：无 token 时返回 None 而不报错（各视图自己决定要不要拦）；
+    但 token 存在且非法时会抛异常，这里一并吞掉返回 None —— 交给
+    `@require_auth` / `@require_role` 给出 401，而不是让异常冒到错误处理器。
     """
-    # --- 方式一：JWT ---
     try:
-        # optional=True：无 token 时返回 None 而不报错；
-        # 但 token 存在且非法时会抛异常，需一并吞掉走旧方式兜底
         verify_jwt_in_request(optional=True)
         identity = get_jwt_identity()
     except Exception:
@@ -36,16 +39,6 @@ def get_current_user():
 
     if identity:
         return User.query.filter_by(username=identity).first()
-
-    # --- 方式二：旧 X-Username（TODO: 全量切换后删除）---
-    username = request.headers.get('X-Username')
-    if username:
-        logger.warning(
-            '检测到已废弃的 X-Username 认证: %s'
-            '（该方式无签名校验、可被伪造，将在后续版本移除）',
-            username,
-        )
-        return User.query.filter_by(username=username).first()
 
     return None
 

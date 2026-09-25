@@ -391,7 +391,7 @@ def video_detect():
     
     file = request.files['video']
     model_name = request.form.get('model', 'yolov8s')
-    username = request.headers.get('X-Username') or 'anonymous'
+    username = get_current_user().username   # 检测记录归属：不能由请求头自称
     
     if file.filename == '':
         return jsonify({"error": "文件名为空"}), 400

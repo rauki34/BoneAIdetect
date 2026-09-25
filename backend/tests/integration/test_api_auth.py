@@ -98,19 +98,35 @@ def test_doctor_cannot_reach_admin_only_endpoint(client, accounts, token):
     assert r.status_code == 403
 
 
-def test_forged_username_header_is_logged_but_still_works(client, accounts, caplog):
-    """**已知的过渡期风险**：X-Username 兜底仍生效（无签名校验、可伪造）
+def test_forged_username_header_rejected(client, accounts):
+    """伪造的 X-Username 必须被拒
 
-    这不是"测试在放行漏洞"，而是把当前真实行为钉住：改造方案里它属于阶段 3 的
-    灰度设计（旧客户端还没升级完），代价与移除条件记在 BASELINE。这里同时断言
-    "能用"与"会告警"—— 等哪天真移除了这个方法，这条用例会失败，正好提醒去改
-    文档与前端，而不是让一条静默的旧路径长期留在生产里。
+    这条曾经是**反着写的**：改造期间为了灰度切换，后端保留了 X-Username 兜底
+    （无签名校验，`curl -H "X-Username: admin"` 即管理员权限），当时的用例把
+    "仍能用"钉住并注明"等移除后这条会失败，正好提醒改文档"。
 
-    注意：不要照抄方案文档草案里的 `test_forged_header_rejected`（断言 401），
-    那是**还没实现的目标态**，照抄会得到一条永远失败的用例。
+    2026-09-25 移除了那段兜底，用例随之翻面 —— 方案文档草案里的
+    `test_forged_header_rejected`（断言 401）从"还没实现的目标态"变成了现实。
     """
     r = client.get('/api/admin/dashboard', headers={'X-Username': accounts['admin']})
-    assert r.status_code == 200, '过渡期该路径仍可用（这正是它危险的地方）'
+    assert r.status_code == 401, '过期两个阶段的认证兜底又回来了？'
+    assert r.get_json()['error_code'] == 'AUTH_001'
+
+
+def test_forged_header_does_not_change_data_scope(client, accounts, token):
+    """伪造头不得影响**数据归属**（比伪造身份更隐蔽的一类）
+
+    移除此前的兜底时顺带发现 5 处**直接读该请求头**的地方，其中
+    `/api/user-ai-models` 是把它当数据过滤键用的 —— 任何登录用户换个请求头就能
+    列出别人的 AI 模型配置。现在那些地方统一改用已认证身份，这里钉住这条不变量：
+    带上伪造头与不带，返回必须一致。
+    """
+    headers = auth(token(accounts['patient']))
+    plain = client.get('/api/user-ai-models', headers=headers)
+    forged = client.get('/api/user-ai-models',
+                        headers={**headers, 'X-Username': accounts['admin']})
+    assert plain.status_code == forged.status_code == 200
+    assert plain.get_json() == forged.get_json(), '请求头仍在影响数据范围'
 
 
 # ---------------------------------------------------------------- 错误处理器

@@ -130,7 +130,7 @@ def update_settings():
     
     # 保存用户AI模型配置（用于下拉框选择）
     if 'ai_provider' in data and 'ai_model' in data:
-        username = request.headers.get('X-Username', 'unknown')
+        username = get_current_user().username   # 归属人必须来自已认证身份，不能读请求头
         save_user_ai_model(
             provider=data['ai_provider'],
             model_id=data['ai_model'],

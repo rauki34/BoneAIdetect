@@ -44,7 +44,7 @@ CORS(app, resources={
     r"/*": {
         "origins": app.config['CORS_ORIGINS'],
         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-        "allow_headers": ["Content-Type", "Authorization", "X-Username"],
+        "allow_headers": ["Content-Type", "Authorization"],
         "expose_headers": ["X-Captcha-ID"],  # 暴露自定义header
         "supports_credentials": True  # 需要启用，因为使用session
     }
