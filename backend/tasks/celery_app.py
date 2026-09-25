@@ -106,6 +106,9 @@ celery_app.conf.update(
     task_routes={
         'training.run': {'queue': 'training'},
         'knowledge.ingest': {'queue': 'ingest'},
+        # 患者记录重切片与文档入库同类（都要跑嵌入模型），走同一个队列 ——
+        # solo 池下两者天然串行，不会互相抢显存
+        'knowledge.ingest_patient': {'queue': 'ingest'},
         'diagnostics.*': {'queue': 'training'},
     },
 

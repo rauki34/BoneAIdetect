@@ -448,8 +448,16 @@ class RAGPipeline:
 
         results = []
         for user in patients:
-            records = MedicalRecord.query.filter_by(
-                patient_id=user.id).order_by(MedicalRecord.visit_date.desc()).all()
+            # **永不含 status='deleted'**：已删除的病历不该进知识库 —— 与
+            # query_medical_records 工具的口径一致（那里也是"绝不含 deleted"）。
+            # 归档（archived）的保留：它是历史事实，检索引用历史病程是合理的。
+            # 注：目前没有接口会把病历置成 deleted，所以这条过滤眼下不改变任何
+            # 行为；但阶段 12 给"保存病历"挂上自动切片之后，这条路径就活了，
+            # 过滤条件必须在同一处对齐，否则将来加删除接口时会静默索引已删病历。
+            records = MedicalRecord.query.filter(
+                MedicalRecord.patient_id == user.id,
+                MedicalRecord.status != 'deleted',
+            ).order_by(MedicalRecord.visit_date.desc()).all()
             for record in records:
                 text = _medical_record_text(record)
                 results.append(self.ingest_text(
@@ -482,6 +490,49 @@ class RAGPipeline:
                                     'source_id': report.id},
                 ))
         return results
+
+    def reingest_patient_records(self, patient_id, *, batch_size=None):
+        """把某患者的病历/报告重新切片入库，**并清掉过期版本**
+
+        ## 为什么需要这个函数，而不是直接调 ingest_patient_records
+
+        那些派生文档的 `file_hash` 里含 `updated_at`（病历）与 `timestamp`
+        （检测报告）—— 病历一改，哈希就变，而 `_find_existing` 对 DB 派生文档
+        （`file_path` 为空）只能按哈希匹配，找不到旧行 → **新建一条，旧的那条
+        仍是 ready 留在索引里**。后果是同一个病历在检索里出现新旧两版（内容
+        互相矛盾），引用还可能指向旧版；病历被删除时那条旧文档更是永远留着。
+
+        所以重入库必须自己收尾：**本次产出的文档是唯一真相**，该患者其余
+        "DB 派生"的文档一律删除。
+
+        **不能按 origin 删**：医生给患者上传的真实 PDF 也是 `patient_record`
+        来源，但那种有 `file_path`，必须留着。判据是"`file_path` 为空且
+        `doc_meta` 里有 `source_table`" —— 只有 DB 派生的文档两者同时成立。
+
+        返回 {'ingested': n, 'pruned': m}，供任务日志与验证脚本使用。
+        """
+        results = self.ingest_patient_records(patient_id=patient_id,
+                                             batch_size=batch_size)
+        keep = {r.doc_id for r in results if getattr(r, 'doc_id', None)}
+
+        stale = []
+        for doc in KnowledgeDoc.query.filter(
+                KnowledgeDoc.patient_id == patient_id,
+                KnowledgeDoc.file_path.is_(None)).all():
+            if doc.id in keep:
+                continue
+            meta = safe_json_loads(doc.doc_meta, {}) or {}
+            if meta.get('source_table'):        # 只删 DB 派生的，不碰上传的文件
+                stale.append(doc)
+        for doc in stale:
+            logger.info('清理过期的派生文档: 《%s》(doc_id=%s)', doc.title, doc.id)
+            db.session.delete(doc)
+        if stale:
+            db.session.commit()
+            # 跨进程失效：入库跑在 worker 里，而检索在 API 进程里。
+            # 不这么做的话，删掉的旧切片最多 60 秒内还会被检索到。
+            store.invalidate_cache()
+        return {'ingested': len(keep), 'pruned': len(stale)}
 
     def prune_corpus(self, corpus_dir=None):
         """删除语料目录中已不存在的文件的库内记录（共享库）"""

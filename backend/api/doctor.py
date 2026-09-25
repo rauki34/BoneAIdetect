@@ -294,6 +294,9 @@ def doctor_create_report():
 
     log_operation(f"医生创建/更新报告:detection_id={detection_id},patient_id={patient_id}")
 
+    # 报告刚归属到患者，患者侧检索要能查到它（异步，见 _enqueue_patient_ingest）
+    _enqueue_patient_ingest(patient_id, username=user.username)
+
     return jsonify({
         "success": True,
         "message": "报告已创建并关联患者",
@@ -418,6 +421,10 @@ def doctor_update_report(report_id):
     
     # 记录操作日志
     log_operation(f"医生编辑报告:report_id={report_id}")
+
+    # 报告内容变了，对应的派生切片要重做（否则检索到的是旧诊断）
+    if report.patient_id:
+        _enqueue_patient_ingest(report.patient_id)
     
     return jsonify({
         "success": True,
@@ -706,7 +713,10 @@ def doctor_create_record():
         )
         db.session.add(record)
         db.session.commit()
-        
+
+        # 新病历要进知识库，否则患者侧检索不到它（异步，见 _enqueue_patient_ingest）
+        _enqueue_patient_ingest(patient_id, username=doctor.username)
+
         return jsonify({
             "success": True,
             "message": "病历创建成功",
@@ -742,7 +752,11 @@ def doctor_update_record(record_id):
         record.updated_at = datetime.utcnow()
         
         db.session.commit()
-        
+
+        # 病历改了要重切片：file_hash 里含 updated_at，旧文档会成为"过期版本"
+        # 留在索引里，由任务内部按"本次产出即真相"清理（见 reingest_patient_records）
+        _enqueue_patient_ingest(record.patient_id, username=doctor.username)
+
         return jsonify({
             "success": True,
             "message": "病历更新成功"
@@ -752,6 +766,34 @@ def doctor_update_record(record_id):
         db.session.rollback()
         logger.error(f"更新病历失败: {e}")
         return jsonify({"error": "更新失败"}), 500
+
+# ==================== 患者记录重切片（阶段 12 补的钩子）====================
+
+def _enqueue_patient_ingest(patient_id, username=None):
+    """把「某患者的病历/报告重新切片」投进队列（**不影响当前请求**）
+
+    ## 为什么需要这个钩子
+
+    在此之前，`ingest_patient_records` 全后端只有 `scripts/ingest_knowledge.py`
+    一个调用点。于是医生改了病历或新出报告之后，知识库里的个人切片还是旧的：
+    患者问"我上次诊断出什么问题"，普通对话路径检索到的是**过期病历**；
+    病历被删除时，那条派生文档也一直留在索引里。
+
+    ## 两个刻意的取舍
+
+    1. **不在请求里同步做**：切片要跑嵌入模型（GPU，几十秒），放在保存病历的
+       请求里会把医生页面卡住。与文档上传的异步化是同一个取舍。
+    2. **投递失败不抛异常**：病历**已经存好了**，知识库暂时陈旧不是保存失败。
+       这里只记 WARNING；抛出去会变成"保存病历失败"，而那是假的。
+
+    病历变更（含删除）都走同一个入口：任务内部按"本次产出的文档是唯一真相"
+    清理过期版本，所以删除病历同样只需投一次。
+    """
+    try:
+        from tasks.knowledge import ingest_patient_records_task
+        ingest_patient_records_task.delay(int(patient_id), username=username)
+    except Exception as e:      # noqa: BLE001 —— 队列不可用不该影响业务
+        logger.warning('患者记录重切片投递失败（知识库可能暂时陈旧）: %s', e)
 
 # -------------------- 编辑个人信息 API --------------------
 

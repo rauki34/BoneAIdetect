@@ -61,3 +61,43 @@ def ingest_document(self, doc_id, username=None, force=False):
             'error': result.error,
             'elapsed': round(result.elapsed, 2),
         }
+
+
+@celery_app.task(name='knowledge.ingest_patient', bind=True)
+def ingest_patient_records_task(self, patient_id, username=None):
+    """把某患者的病历与检测报告重新切片入库（阶段 12 补的钩子）
+
+    ## 为什么需要它
+
+    在此之前，`ingest_patient_records` **只有 `scripts/ingest_knowledge.py`
+    一个调用点** —— 医生改了病历或新出报告之后，知识库里的个人切片还是旧的，
+    患者问"我上次诊断出什么问题"会得到基于过期病历的回答；病历删了，那条
+    派生文档也一直留在索引里。阶段 7 的语料管线早就支持按 `updated_at` 重算，
+    只是**没人触发它**（方案里这条被标成"可选、可裁剪"，然后就一直没做）。
+
+    ## 为什么走队列而不是在请求里同步做
+
+    切片要跑嵌入模型（GPU，几十秒），放在保存病历的请求里会把医生页面卡住。
+    走队列则请求立即返回，切片在后台完成——与文档上传的异步化是同一个取舍
+    （见本模块开头的说明）。
+
+    投递失败**不影响业务**：病历已经存好了，只是知识库暂时陈旧 ——
+    调用方（api/doctor.py）只记 WARNING，不把异常抛给医生。
+    """
+    started = time.time()
+    with app_context():
+        from core.helpers import log_operation
+        from services.rag.pipeline import RAGPipeline
+        from utils.logger import logger
+
+        stats = RAGPipeline().reingest_patient_records(patient_id)
+        logger.info('患者记录入库结束: patient_id=%s 入库 %s 篇 / 清理过期 %s 篇，'
+                    '耗时 %.1fs', patient_id, stats['ingested'], stats['pruned'],
+                    time.time() - started)
+        log_operation(
+            f'患者记录重新切片: patient_id={patient_id} '
+            f'入库 {stats["ingested"]} 篇、清理过期 {stats["pruned"]} 篇',
+            username=username)
+        stats['patient_id'] = patient_id
+        stats['elapsed'] = round(time.time() - started, 2)
+        return stats
