@@ -367,6 +367,245 @@ def _has_payload(result):
                                       'overdue', 'context', 'count', 'notes'))
 
 
+# ==================== Part A：编排层 ====================
+
+class ScriptedClient:
+    """脚本化的假 LLM 客户端
+
+    只实现编排真正会用到的三个成员（supports_tools / provider_name /
+    chat_reply）—— 这条约束是双向的：orchestrator 里一旦访问了 client 的
+    其它属性，这里就会 AttributeError，而真客户端能跑。那种情况下这条
+    确定性用例会失效，所以它同时也是"编排没越界用 client"的断言。
+    """
+
+    def __init__(self, replies, *, supports_tools=True, repeat_last=False):
+        self._replies = list(replies)
+        self.provider_name = 'scripted'
+        self.supports_tools = supports_tools
+        self.repeat_last = repeat_last
+        self.calls = []
+
+    def chat_reply(self, messages, **kwargs):
+        import copy
+        self.calls.append({'messages': copy.deepcopy(messages), 'kwargs': kwargs})
+        if not self._replies:
+            if self.repeat_last:
+                return self._last
+            from services.llm_client import LLMTimeoutError
+            raise LLMTimeoutError('脚本已耗尽（编排调用的轮次多于预期）')
+        nxt = self._replies.pop(0)
+        self._last = nxt
+        if isinstance(nxt, Exception):
+            raise nxt
+        return nxt
+
+
+def _tool_call(name, args, cid):
+    from services.llm_client import ToolCall
+    return ToolCall(id=cid, name=name, arguments=args,
+                    raw_arguments=json.dumps(args, ensure_ascii=False))
+
+
+def _reply_tools(*calls):
+    from services.llm_client import LLMReply
+    return LLMReply(content='', tool_calls=list(calls), finish_reason='tool_calls')
+
+
+def _reply_text(text, finish='stop'):
+    from services.llm_client import LLMReply
+    return LLMReply(content=text, finish_reason=finish)
+
+
+def part_orchestrator(app):
+    from config import config as app_config
+    from database import User
+    from services.agent import orchestrator
+    from services.agent.principal import Principal
+    from services.llm_client import LLMReply
+
+    with app.app_context():
+        patient = User.query.filter_by(role='patient').first()
+        if patient is None:
+            skip('编排层用例', '库里没有患者账号')
+            return
+        principal = Principal(patient.id, 'patient', patient.username)
+
+    patched = {}
+    for key in ('AGENT_ENABLED', 'AGENT_MAX_ITERATIONS', 'AGENT_MAX_TOOL_CALLS',
+                'AGENT_TIMEOUT_SECONDS', 'AGENT_LLM_TIMEOUT'):
+        patched[key] = getattr(app_config, key)
+
+    def run(question, client, **kw):
+        return orchestrator.run(question, session_id='agent-verify',  # noqa: A001
+                               principal=principal, client=client, history=[], **kw)
+
+    try:
+        section('[A.11] 多步编排：一轮并行多个工具 + 回灌后收尾')
+        client = ScriptedClient([
+            _reply_tools(
+                _tool_call('query_medical_records', {}, 'c1'),
+                _tool_call('list_detection_reports', {'limit': 3}, 'c2'),
+                _tool_call('search_guideline', {'query': '康复训练'}, 'c3'),
+            ),
+            _reply_text('根据指南与你的记录，建议如下……'),
+        ])
+        state = run('我该怎么康复？', client)
+        names = {t['name'] for t in state.trace if t['type'] == 'tool_result'}
+        check('一轮里的 3 个 tool_calls 都被执行', state.tool_calls_made == 3,
+              f'tool_calls_made={state.tool_calls_made}')
+        check('trace 里出现 3 个不同工具（方案文档 Check 2 的确定性版本）',
+              len(names) == 3, f'{sorted(names)}')
+        check('回灌后模型收尾 → stopped_reason=answered',
+              state.stopped_reason == 'answered', state.stopped_reason)
+        check('最终回答来自收尾轮', state.answer == '根据指南与你的记录，建议如下……',
+              state.answer[:40])
+        check('迭代 2 轮（一轮调工具 + 一轮作答）', state.iterations == 2,
+              f'iterations={state.iterations}')
+
+        section('[A.12] 回灌消息的形状（形状错会被 provider 400 或静默忽略）')
+        second = client.calls[1]['messages']
+        assistants = [m for m in second if m.get('role') == 'assistant'
+                      and m.get('tool_calls')]
+        tool_msgs = [m for m in second if m.get('role') == 'tool']
+        check('存在带 tool_calls 的 assistant 消息', len(assistants) == 1)
+        check('3 个工具各产生一条 role=tool 消息', len(tool_msgs) == 3,
+              f'{len(tool_msgs)} 条')
+        if assistants and tool_msgs:
+            ids_in_assistant = [c['id'] for c in assistants[0]['tool_calls']]
+            ids_in_tool = [m['tool_call_id'] for m in tool_msgs]
+            check('tool_call_id 一一对应（按"一轮一个"写会丢结果）',
+                  ids_in_assistant == ids_in_tool,
+                  f'{ids_in_assistant} vs {ids_in_tool}')
+            check('assistant 的 arguments 是原样回灌的 JSON 字符串',
+                  all(isinstance(c['function']['arguments'], str)
+                      for c in assistants[0]['tool_calls']))
+        ok_json = True
+        for m in tool_msgs:
+            try:
+                json.loads(m['content'])
+            except (TypeError, ValueError):
+                ok_json = False
+        check('tool 消息的 content 是合法 JSON', ok_json)
+        check('第二次调用时带上了工具定义（tools 非空）',
+              bool(client.calls[1]['kwargs'].get('tools')))
+
+        section('[A.13] 护栏：迭代上限 / 工具上限 / 时间预算')
+        app_config.AGENT_MAX_ITERATIONS = 2
+        guard = ScriptedClient([_reply_tools(_tool_call('search_guideline',
+                                                        {'query': 'x'}, 'g1'))],
+                               repeat_last=True)
+        t0 = time.time()
+        state = run('无限调工具', guard)
+        cost = time.time() - t0
+        check('永远返回 tool_calls 的模型被迭代上限截断（没有护栏会挂死）',
+              state.stopped_reason == 'max_iters', state.stopped_reason)
+        check('迭代次数恰为上限值', state.iterations == 2, f'{state.iterations}')
+        check('被截断时仍在 5 秒内返回', cost < 5, f'{cost:.2f}s')
+        check('trace 里有 guard 记录说明原因',
+              any(t['type'] == 'guard' and t['status'] == 'max_iters'
+                  for t in state.trace))
+        app_config.AGENT_MAX_ITERATIONS = patched['AGENT_MAX_ITERATIONS']
+
+        app_config.AGENT_MAX_TOOL_CALLS = 2
+        guard2 = ScriptedClient([_reply_tools(
+            _tool_call('search_guideline', {'query': 'a'}, 't1'),
+            _tool_call('search_guideline', {'query': 'b'}, 't2'))],
+            repeat_last=True)
+        state = run('工具预算', guard2)
+        check('工具总数上限生效（单靠轮次拦不住一轮多个）',
+              state.stopped_reason == 'tool_budget', state.stopped_reason)
+        check('工具调用数恰为上限', state.tool_calls_made == 2,
+              f'{state.tool_calls_made}')
+        app_config.AGENT_MAX_TOOL_CALLS = patched['AGENT_MAX_TOOL_CALLS']
+
+        app_config.AGENT_TIMEOUT_SECONDS = 0
+        budget = ScriptedClient([_reply_text('不该被调用')])
+        state = run('预算为零', budget)
+        check('时间预算耗尽 → time_budget 且不发 LLM 请求',
+              state.stopped_reason == 'time_budget' and len(budget.calls) == 0,
+              f'{state.stopped_reason} calls={len(budget.calls)}')
+        app_config.AGENT_TIMEOUT_SECONDS = patched['AGENT_TIMEOUT_SECONDS']
+
+        section('[A.14] 工具层的失败不终止编排')
+        dup = ScriptedClient([
+            _reply_tools(_tool_call('query_medical_records', {}, 'd1')),
+            _reply_tools(_tool_call('query_medical_records', {}, 'd2')),
+            _reply_text('已拿到信息'),
+        ])
+        state = run('重复调用', dup)
+        statuses = [t['status'] for t in state.trace if t['type'] == 'tool_result']
+        check('第二次同名同参 → duplicate，且编排继续走完',
+              'duplicate' in statuses and state.stopped_reason == 'answered',
+              f'{statuses} / {state.stopped_reason}')
+        check('duplicate 也计入工具调用数（否则可以无限重试绕过上限）',
+              state.tool_calls_made == 2, f'{state.tool_calls_made}')
+
+        bad_args = ScriptedClient([
+            _reply_tools(_tool_call('query_medical_records', {}, 'b1')),
+            _reply_text('参数错了也继续'),
+        ])
+        bad_args_ok = True
+        state = run('非法参数', bad_args)
+        check('arguments 解析失败不终止编排（模型能自我修正）',
+              state.stopped_reason == 'answered' and state.answer, state.stopped_reason)
+
+        section('[A.15] 降级矩阵：任何路径都不该让对话不可用')
+        app_config.AGENT_ENABLED = False
+        disabled = ScriptedClient([_reply_text('不该被调用')])
+        state = run('总开关关闭', disabled)
+        check('AGENT_ENABLED=false → degraded 且原因明确',
+              state.degraded and state.degraded_reason == 'disabled',
+              f'{state.degraded}/{state.degraded_reason}')
+        check('降级时根本没走 Agent 路径（0 次 LLM 调用）',
+              len(disabled.calls) == 0, f'{len(disabled.calls)} 次')
+        app_config.AGENT_ENABLED = patched['AGENT_ENABLED']
+
+        unsupported = ScriptedClient([_reply_text('不该被调用')], supports_tools=False)
+        state = run('provider 不支持工具', unsupported)
+        check('provider 不支持工具 → provider_unsupported',
+              state.degraded and state.degraded_reason == 'provider_unsupported',
+              f'{state.degraded}/{state.degraded_reason}')
+        check('降级时 0 次 LLM 调用（不能先发一次请求试出来）',
+              len(unsupported.calls) == 0, f'{len(unsupported.calls)} 次')
+
+        from services.llm_client import LLMTimeoutError
+        failing = ScriptedClient([LLMTimeoutError('模拟超时')])
+        state = run('模型挂了', failing)
+        check('首轮 LLMError → stopped_reason=llm_error 且标记降级',
+              state.stopped_reason == 'llm_error' and state.degraded,
+              f'{state.stopped_reason}/{state.degraded}')
+        check('失败时 answer 为空（由视图层决定回退到普通对话）',
+              state.answer == '', repr(state.answer[:20]))
+
+        section('[A.16] trace 契约：可 JSON 序列化、step 递增、类型齐全')
+        client = ScriptedClient([
+            _reply_tools(_tool_call('search_guideline', {'query': '指南'}, 's1')),
+            _reply_text('回答'),
+        ])
+        state = run('trace 结构', client)
+        types = [t['type'] for t in state.trace]
+        check('trace 含 planner / tool_result / answer 三类',
+              {'planner', 'tool_result', 'answer'} <= set(types), f'{types}')
+        check('step 从 1 连续递增',
+              [t['step'] for t in state.trace] == list(range(1, len(state.trace) + 1)))
+        serializable = True
+        try:
+            json.loads(json.dumps(state.trace, ensure_ascii=False))
+        except (TypeError, ValueError) as e:
+            serializable = False
+            check('trace 可 JSON 序列化', False, str(e))
+        if serializable:
+            check('trace 可 JSON 序列化（不能含 datetime 对象）', True)
+        check('检索类工具把引用带进 state.references（侧信道，不进模型上下文）',
+              any(r.get('chunk_id') for r in state.references),
+              f'{len(state.references)} 条')
+        check('引用未混进发给模型的消息里',
+              all('_references' not in str(m) for m in client.calls[-1]['messages']))
+    finally:
+        for key, value in patched.items():
+            setattr(app_config, key, value)
+
+
 # ==================== Part B：端到端（--with-llm）====================
 
 def part_llm(app):
@@ -386,6 +625,14 @@ def main():
         import traceback
         traceback.print_exc()
         check('工具层用例执行', False, f'{type(e).__name__}: {e}')
+
+    if not TOOLS_ONLY:
+        try:
+            part_orchestrator(app)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            check('编排层用例执行', False, f'{type(e).__name__}: {e}')
 
     if WITH_LLM and not TOOLS_ONLY:
         try:
