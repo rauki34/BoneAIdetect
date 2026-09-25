@@ -1,0 +1,14 @@
+# 不入镜像的东西：运行期产物、模型权重、缓存
+__pycache__/
+*.pyc
+logs/
+uploads/
+results/
+runs/
+instance/
+.hf_cache/
+models/*.pt
+*.log
+.pytest_cache/
+tests/
+.coverage

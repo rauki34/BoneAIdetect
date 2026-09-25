@@ -1,0 +1,153 @@
+# 一键起全套（阶段 11）
+#
+# ⚠️ **本文件未经实跑验证**：开发机没有 Docker（阶段 11 时的状态）。结构与语法
+# 做过静态校验（YAML 可解析、服务名/依赖/卷路径与仓库实际布局一致），但没有真正
+# `docker compose up` 跑通过。
+#
+# 装好 Docker Desktop 后的验证步骤（跑完请把上面这段删掉）：
+#     cp .env.example .env && 填 POSTGRES_PASSWORD / SECRET_KEY
+#     docker compose up -d --build
+#     docker compose ps                      # 期望 5 个服务 healthy
+#     curl -s localhost:5000/api/health      # 期望 {"status":"ok","db":true,...}
+#     curl -s localhost:8080/api/health      # 经 nginx 反代，同样应通
+#
+# 与本地开发脚本（backend/scripts/*.sh）的关系：两套并存，互不干扰 ——
+# 脚本管本机直跑，compose 管容器编排。注意**两者不能同时占用同一批端口**。
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16       # 必须是带 pgvector 的镜像：RAG 依赖向量列
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?必须设置 POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-ortho}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d ${POSTGRES_DB:-ortho}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    # 与本地开发一致：开启 AOF，否则"可持久化"只是口号（阶段 8 的取舍）
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ./backend
+      args:
+        # 只要 CPU 推理时设成 https://download.pytorch.org/whl/cpu，镜像小很多
+        TORCH_INDEX_URL: ${TORCH_INDEX_URL:-}
+    environment: &backend_env
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-ortho}
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+      SECRET_KEY: ${SECRET_KEY:?必须设置 SECRET_KEY}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-${SECRET_KEY}}
+      FLASK_ENV: production
+      # 容器内是 Linux + 单机部署，没有 Git Bash 那套参数转换问题
+      RAG_DEVICE: ${RAG_DEVICE:-cpu}
+      AI_SERVICE_URL: http://ai-service:8000
+    volumes:
+      # 运行期产物必须挂出来，否则容器一重建，历史检测图与训练产物全丢
+      - uploads:/app/backend/uploads
+      - results:/app/backend/results
+      - runs:/app/backend/runs
+      - logs:/app/backend/logs
+      # 知识库语料随仓库提交，镜像里已有；这里用 volume 是为了让上传的新文档
+      # 在重建后仍然在（backend/knowledge/uploads 是运行期目录）
+      - knowledge_uploads:/app/backend/knowledge/uploads
+    ports:
+      - "${BACKEND_PORT:-5000}:5000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:5000/api/health"]
+      interval: 30s
+      timeout: 10s
+      # 首次启动要加载 YOLO 权重并建表，给足 5 分钟再判定失败
+      start_period: 300s
+      retries: 3
+    restart: unless-stopped
+
+  celery:
+    build:
+      context: ./backend
+      args:
+        TORCH_INDEX_URL: ${TORCH_INDEX_URL:-}
+    command: >
+      python -m celery -A tasks.celery_app worker
+      -l info -P solo -Q training,ingest
+    environment: *backend_env
+    volumes:
+      - uploads:/app/backend/uploads
+      - results:/app/backend/results
+      - runs:/app/backend/runs
+      - logs:/app/backend/logs
+      - knowledge_uploads:/app/backend/knowledge/uploads
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    # ⚠️ worker 与后端是**两个进程**，只起后端的话训练与入库会永远停在
+    # "处理中"（接口返回 202 已受理）。这是这套系统最容易漏的一步。
+    #
+    # -P solo：与本地 Windows 的取舍保持一致（GPU 任务天然串行，6GB 显存下
+    # YOLO 训练与 bge-m3 向量化不会互抢）。Linux 上 prefork 也能跑，但那样
+    # 行为就与开发环境不一致了，排查成本更高。
+    restart: unless-stopped
+
+  ai-service:
+    build:
+      context: ./AI
+    environment:
+      FLASK_ENV: production
+    volumes:
+      # 模型权重目录不入镜像（AI/Qwen3-VL-4B-Instruct 在 .gitignore 里，约 8GB）
+      - ./AI/Qwen3-VL-4B-Instruct:/app/Qwen3-VL-4B-Instruct:ro
+    ports:
+      - "${AI_PORT:-8000}:8000"
+    # GPU 透传需要宿主机装 nvidia-container-toolkit。没有 GPU 时把这整段删掉即可，
+    # 后端会退回远程 Provider（DB 里的 ai_provider 配置）或本地服务不可用的降级路径。
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+    ports:
+      - "${FRONTEND_PORT:-8080}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  redisdata:
+  uploads:
+  results:
+  runs:
+  logs:
+  knowledge_uploads:

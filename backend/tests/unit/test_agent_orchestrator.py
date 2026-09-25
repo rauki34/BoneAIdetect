@@ -245,6 +245,45 @@ def test_private_keys_not_sent_to_model(patient):
     assert any(m.get('content') == '之前的问题' for m in sent)
 
 
+def test_no_grounding_flag_when_nothing_retrieved(patient):
+    """调了工具但一次资料都没取到，却照样作答 → 必须标 no_grounding
+
+    实测模型会无视 not_found 凭记忆作答（提示词已写明不得编造）。这个标记是
+    产品层的兜底：让用户看到"本次回答未检索到资料支撑"，而不是以为它查过。
+    """
+    client = ScriptedClient([
+        reply_tools(tool_call('search_guideline', BAD_ARGS, 'n1')),
+        reply_text('凭记忆给出的具体分期标准……'),
+    ])
+    state = run('库外问题', client, patient)
+    assert state.material_ok is False
+    assert state.degraded and state.degraded_reason == 'no_grounding'
+    assert any(t['type'] == 'guard' and t['status'] == 'no_grounding'
+               for t in state.trace)
+
+
+def test_no_flag_when_material_was_retrieved(monkeypatch, patient):
+    """取到了资料就不该误标 —— 否则这个标记会变成噪声，用户会忽略它
+
+    用注入的假工具而不是真实检索：单测不连数据库，真检索会失败并返回
+    internal_error，那样测的就成了"环境不可用"，而不是这里的标记逻辑。
+    """
+    from services.agent import tools as tools_mod
+
+    monkeypatch.setitem(
+        tools_mod.TOOL_REGISTRY, 'fake_ok',
+        tools_mod.ToolSpec('fake_ok', '', {'type': 'object', 'properties': {},
+                                           'required': []},
+                           lambda principal, args: {'count': 2}, False))
+    client = ScriptedClient([
+        reply_tools(tool_call('fake_ok', {}, 'm1')),
+        reply_text('根据资料……'),
+    ])
+    state = run('正常问答', client, patient)
+    assert state.material_ok is True
+    assert state.degraded_reason != 'no_grounding'
+
+
 def test_tool_schemas_sent_to_model(patient):
     client = ScriptedClient([reply_text('好')])
     run('q', client, patient)

@@ -1111,11 +1111,18 @@ def part_llm(app):
               f'调用 {len(t_res)} 次，状态={[t["status"] for t in t_res]}')
         check('回答里没有伪造的引用编号（模型完全可能在 not_found 后继续编造）',
               not re.search(r'\[\d+\]', answer), answer[:80])
-        check('明确说明无法回答/资料不足，而不是给出方案',
-              any(w in answer for w in ('无法回答', '没有相关资料', '资料不足',
-                                        '暂时无法查证', '查不到', '无法提供',
-                                        '没有找到')),
-              answer[:80])
+        refused = any(w in answer for w in ('无法回答', '没有相关资料', '资料不足',
+                                            '暂时无法查证', '查不到', '无法提供',
+                                            '没有找到'))
+        check('明确说明无法回答/资料不足，而不是给出方案', refused, answer[:80])
+        # 这条是**已知会间歇性失败**的安全断言：实测模型有时无视 not_found 凭记忆
+        # 作答（2026-09-25 的一次运行里就讲起了 Enneking 分期的内容，且未伪造引用）。
+        # 这是被测系统的真实缺陷，不是脚本的问题，所以判据不放宽；同时编排层会
+        # 把这种情况标成 degraded_reason=no_grounding，让产品如实告知用户
+        # "本次回答未检索到资料支撑"。两条合起来看：要么拒答，要么被标记。
+        check('未拒答时必须有"无据作答"标记（产品层兜底，不能两者都没有）',
+              refused or data.get('degraded_reason') == 'no_grounding',
+              f"refused={refused} degraded_reason={data.get('degraded_reason')}")
 
         section('[B.5] 轨迹持久化与刷新恢复')
         r = requests.get(f'{BASE}/api/ai-assistant/history',

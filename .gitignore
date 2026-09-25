@@ -62,3 +62,9 @@ dist/
 .env.local
 .env.*.local
 backend/logs/
+
+# 测试产物
+.coverage
+backend/.coverage
+.pytest_cache/
+backend/.pytest_cache/

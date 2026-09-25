@@ -55,6 +55,9 @@ class AgentState:
     trace: list = field(default_factory=list)
     references: list = field(default_factory=list)
     answer: str = ''
+    # 本轮是否真的取到了资料（任一工具没报错）。用于识别"一次资料都没取到却照样
+    # 作答"—— 实测模型会无视 not_found 凭记忆作答，这是真实缺陷（见 no_grounding）
+    material_ok: bool = False
     memory: dict = field(default_factory=dict)   # 本轮的记忆压缩结果（可观测）
     stopped_reason: str = ''      # answered|max_iters|tool_budget|time_budget|llm_error|degraded
     degraded: bool = False
@@ -217,6 +220,8 @@ def tools_node(state):
         t0 = time.monotonic()
         result = execute_tool(call, state)      # 永不抛异常
         state.tool_calls_made += 1
+        if not result.get('error'):
+            state.material_ok = True            # 至少有一个工具真的取到了东西
         state.messages.append(_tool_message(call, result))
         state.add_trace(
             'tool_result', name=call.name, args=call.arguments,
@@ -371,7 +376,18 @@ def run(question, *, session_id, principal, patient_id=None, client=None,
         else:
             node = nxt
 
-    logger.info('Agent 编排结束: reason=%s iterations=%d tools=%d elapsed=%dms',
-                state.stopped_reason, state.iterations, state.tool_calls_made,
-                state.elapsed_ms)
+    # **无据作答**：调了工具但一次资料都没取到（全是 not_found/unsupported），
+    # 模型却照样给出了回答。实测会发生（提示词里已写明"不得编造"，模型仍会凭
+    # 记忆答）—— 这是模型行为层面的真实缺陷，堵不住，但必须**如实暴露**：
+    # 打上 degraded 标记，前端据此提示"本次回答未检索到资料支撑"。
+    # 与"检索坏了却装作没资料"是两条相反的错误，都靠这里区分开。
+    if state.answer and state.tool_calls_made and not state.material_ok:
+        state.degraded = True
+        state.degraded_reason = state.degraded_reason or 'no_grounding'
+        state.add_trace('guard', status='no_grounding',
+                        summary='未检索到任何资料，回答未获资料支撑')
+
+    logger.info('Agent 编排结束: reason=%s iterations=%d tools=%d material=%s '
+                'elapsed=%dms', state.stopped_reason, state.iterations,
+                state.tool_calls_made, state.material_ok, state.elapsed_ms)
     return state

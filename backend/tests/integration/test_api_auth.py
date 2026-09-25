@@ -35,6 +35,30 @@ def token(full_app):
     return _mint
 
 
+@pytest.fixture(autouse=True)
+def _clear_rate_and_quota(accounts, full_app):
+    """清掉这些账号的分钟级限流与本次会话的额度计数
+
+    本文件会往 `/api/agent/chat` 连打几个请求，而它的分钟阈值是 5 次/分
+    —— 连着跑两次、或者紧跟在 `scripts/verify_agent.py` 之后跑（它也会打满），
+    拿到的就是 429 而不是被测的状态码，看起来像功能坏了。
+    限流计数是测试自有的状态，清掉即可（`verify_agent.py` 开头做的是同一件事）。
+    """
+    from core.cache import get_redis
+    client = get_redis()
+    if client is None:
+        yield
+        return
+    from database import User
+    with full_app.app_context():
+        ids = [u.id for u in User.query.filter(
+            User.username.in_(list(accounts.values()))).all()]
+    for uid in ids:
+        client.delete(f'rl:agent_chat:user:{uid}', f'rl:ai_chat:user:{uid}',
+                      f'quota:session:{uid}:pytest')
+    yield
+
+
 def auth(tok):
     return {'Authorization': f'Bearer {tok}'}
 
@@ -90,6 +114,21 @@ def test_forged_username_header_is_logged_but_still_works(client, accounts, capl
 
 
 # ---------------------------------------------------------------- 错误处理器
+
+def test_health_endpoint(client):
+    """健康检查的契约：数据库通才算 ok，Redis 挂了只算 degraded
+
+    Compose 的 healthcheck 与负载均衡探活都读它（`/api/health`），所以判定口径
+    要立得住：数据库不可用 = 整个系统不可用；Redis 不可用只是降级（缓存与队列
+    退化），不该让容器被判成 unhealthy 而反复重启。
+    """
+    r = client.get('/api/health')
+    assert r.status_code == 200
+    body = r.get_json()
+    assert body['status'] == 'ok' and body['db'] is True
+    assert body['redis'] is True, '本条用例要求本机 Redis 在跑'
+    assert body['timestamp']
+
 
 def test_404_returns_json_error_body(client):
     """错误处理器必须返回约定好的 JSON

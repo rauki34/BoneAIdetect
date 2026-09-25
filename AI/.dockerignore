@@ -1,0 +1,4 @@
+__pycache__/
+*.pyc
+Qwen3-VL-4B-Instruct/
+*.log

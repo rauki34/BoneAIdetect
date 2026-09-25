@@ -384,6 +384,46 @@ def handle_unexpected_error(error):
 
 
 
+# ==================== 健康检查 ====================
+
+@app.route("/api/health")
+def health():
+    """健康检查（Compose 的 healthcheck、负载均衡探活、运维排查）
+
+    刻意**不复用 `/api/captcha`**：那个会写验证码存储、受限流、还往日志里灌
+    明文验证码 —— 一个每 30 秒被调用一次的健康检查不该有这些副作用。
+
+    判定口径：**数据库通才算健康**（compromised 的库等于整个系统不可用）；
+    Redis 不可用只是降级（缓存与队列退化），如实报出来但不判失败 —— 与
+    `core/cache.py` 里"缓存组件故障不该让医护用不了系统"的既有取舍一致。
+    """
+    from sqlalchemy import text as _sql_text
+
+    body = {'status': 'ok', 'db': False, 'redis': False}
+    code = 200
+    try:
+        db.session.execute(_sql_text('SELECT 1'))
+        body['db'] = True
+    except Exception as e:                     # noqa: BLE001 —— 健康检查必须自己吞异常
+        body['status'] = 'unhealthy'
+        body['db_error'] = type(e).__name__
+        code = 503
+    try:
+        from core.cache import get_redis
+        client = get_redis()
+        if client is not None:
+            client.ping()
+            body['redis'] = True
+        else:
+            body['status'] = body['status'] if code != 200 else 'degraded'
+    except Exception as e:                     # noqa: BLE001
+        body['redis_error'] = type(e).__name__
+        if code == 200:
+            body['status'] = 'degraded'
+    body['timestamp'] = datetime.utcnow().isoformat()
+    return jsonify(body), code
+
+
 # ==================== 静态文件接口 ====================
 
 @app.route("/results/<path:filename>")
