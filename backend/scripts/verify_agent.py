@@ -321,6 +321,37 @@ def part_tools(app):
           r_high.get('error') is None and (r_high.get('count') or 0) > 0,
           f"count={r_high.get('count')} err={r_high.get('error')}")
 
+    section('[A.7c] 重排不可用时不能把检索结果全否决')
+    # 阶段 10 的对比实验发现的真实缺陷：开启重排时 score 是重排分（真命中 ≥0.9），
+    # 重排不可用时会退回 RRF 分（量级 0.016）—— 同一个 0.25 的阈值会把**所有**
+    # 结果判成不相关，表现是重排模型一加载失败，指南检索就静默全废。
+    from services.rag.retriever import get_retriever
+    retriever = get_retriever()
+    original_reranker = retriever.reranker
+
+    class _NoRerank:
+        def rerank(self, query, pairs):
+            return None          # 模拟重排模型不可用（encode 失败/未加载）
+
+    try:
+        with app.app_context():
+            retriever.reranker = _NoRerank()
+            retriever.clear_caches() if hasattr(retriever, 'clear_caches') else None
+            from services.rag import retriever as retr_mod
+            retr_mod.clear_caches()
+        r = call('search_guideline', {'query': '股骨远端骨折的AO分型标准'},
+                 Principal(ids['a'], 'patient', 'verify-a'))
+        check('重排不可用时仍能返回检索结果（而不是 not_found）',
+              r.get('error') is None and (r.get('count') or 0) > 0,
+              f"count={r.get('count')} err={r.get('error')}")
+        check('此时分数是 RRF 刻度（<0.1），说明确实绕过了重排',
+              (r.get('results') or [{}])[0].get('score', 1) < 0.1,
+              f"score={(r.get('results') or [{}])[0].get('score')}")
+    finally:
+        retriever.reranker = original_reranker
+        from services.rag import retriever as retr_mod
+        retr_mod.clear_caches()
+
     section('[A.8] 结果契约：JSON 可序列化 / 截断后仍合法')
     probes = [
         ('search_guideline', {'query': '胫骨平台骨折 康复训练'},

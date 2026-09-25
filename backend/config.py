@@ -131,6 +131,10 @@ class Config:
     # 片段交给模型当依据。向量检索是最近邻，不设阈值时 not_found 永远不可达。
     # 实测本语料真命中 ≥0.9、缺题 ≤0.2，故取中间值。
     AGENT_RAG_MIN_SCORE = float(_env('AGENT_RAG_MIN_SCORE', 0.25))
+    # 重排不可用时的下限（此时 score 是 RRF 分，量级只有 0.016 上下，用上面的
+    # 阈值会把所有结果都判成不相关）。默认 0 = 不设闸门：宁可暂时失去相关度
+    # 闸门，也不能把"重排坏了"伪装成"知识库没这条"。
+    AGENT_RAG_MIN_SCORE_NO_RERANK = float(_env('AGENT_RAG_MIN_SCORE_NO_RERANK', 0.0))
     # 上下文 token 预算与压缩后至少保留的原文条数（Memory 三层压缩）
     AGENT_CONTEXT_TOKEN_BUDGET = int(_env('AGENT_CONTEXT_TOKEN_BUDGET', 3000))
     AGENT_KEEP_RECENT_MESSAGES = int(_env('AGENT_KEEP_RECENT_MESSAGES', 6))

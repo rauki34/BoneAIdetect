@@ -33,6 +33,7 @@ from config import config               # 模块里的 config 是配置实例（
 from database import (DetectionHistory, MedicalRecord, PatientProfile, User,
                       db, get_display_name, safe_json_loads, to_local_time)
 from services.agent.principal import err, resolve_patient
+from utils.logger import logger
 
 # ==================== 注册机制 ====================
 
@@ -194,11 +195,23 @@ def search_guideline(principal, args):
     # 的 Enneking 分期"（本语料没有）也会返回几条分数 0.006 的无关片段。若不
     # 拦截，模型会把它们当成依据来作答，而工具契约里的 not_found 就永远不可达。
     # 实测本语料的分数两极分化：真命中 ≥ 0.9，缺题 ≤ 0.2，阈值取中间。
+    #
+    # **阈值必须区分分数刻度**（阶段 10 的对比实验发现的真实缺陷）：开启重排时
+    # score 是重排分（0~1，真命中 ≥0.9）；重排不可用时会退回 RRF 分（量级
+    # 0.016 上下）。同一个 0.25 用到后者上会把**所有**结果都判成"不相关" ——
+    # 表现是重排模型一加载失败，指南检索就静默全废、每次都答"没有相关资料"。
+    # 所以重排不可用时改用另一个下限（默认 0，即不设闸门），并留下 WARNING：
+    # 宁可暂时失去相关度闸门，也不能把"检索坏了"伪装成"知识库没这条"。
+    reranked = bool(chunks and chunks[0].rerank_used)
     best = max((c.score or 0.0) for c in chunks)
-    if best < config.AGENT_RAG_MIN_SCORE:
+    if not reranked:
+        logger.warning('重排不可用，本次检索按 RRF 分数排序，相关度闸门已跳过')
+    floor = (config.AGENT_RAG_MIN_SCORE if reranked
+             else getattr(config, 'AGENT_RAG_MIN_SCORE_NO_RERANK', 0.0))
+    if best < floor:
         return err('not_found',
                    f'知识库中没有与该问题相关的资料（最高相关度 {best:.2f}，'
-                   f'低于阈值 {config.AGENT_RAG_MIN_SCORE}）')
+                   f'低于阈值 {floor}）')
     return {
         'count': len(chunks),
         'context': format_context(chunks),          # 给模型读的正文
@@ -466,7 +479,6 @@ def execute_tool(call, state):
             return result                      # 业务错误原样返回，不截断
         return _truncate(_jsonable(result), config.AGENT_TOOL_RESULT_MAX_CHARS)
     except Exception as e:                     # noqa: BLE001 —— 刻意兜底
-        from utils.logger import logger
         logger.error('工具执行异常: %s args=%s', call.name, call.arguments,
                      exc_info=True)
         # 只回类型名，不回异常消息：消息里可能带表名/列名等实现细节

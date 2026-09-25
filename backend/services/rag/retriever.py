@@ -364,17 +364,26 @@ class HybridRetriever:
     # ---------- 主流程 ----------
 
     def retrieve(self, query, *, scope, top_k=5, recall_k=20, rrf_k=60,
-                 doc_types=None):
+                 doc_types=None, use_bm25=True, use_rerank=True):
+        """检索
+
+        use_bm25 / use_rerank 是**给评测用的通道开关**（阶段 10 的配置 B
+        "纯向量 RAG" 需要关掉 BM25 与重排，才能在对比实验里把"向量"和
+        "混合+重排"各自的贡献分开）。默认全开，与改造后至今的行为一致。
+        关掉任一通道都会绕过缓存 —— 缓存键不含这两个开关，不绕会串味。
+        """
         if not query or not query.strip():
             return []
+        baseline = use_bm25 and use_rerank
         cache_key = self._cache_key(query, scope, top_k, doc_types)
-        cached = self._cache_get(cache_key)
-        if cached is not None:
-            return [RetrievedChunk.from_dict(item) for item in cached]
+        if baseline:
+            cached = self._cache_get(cache_key)
+            if cached is not None:
+                return [RetrievedChunk.from_dict(item) for item in cached]
 
         vec_ids = self._vector_search(query, scope, recall_k, doc_types)
-        bm25_ids = self._bm25_search(query, scope, recall_k)
-        fused = self._rrf([vec_ids, bm25_ids], k=rrf_k)
+        bm25_ids = self._bm25_search(query, scope, recall_k) if use_bm25 else []
+        fused = self._rrf([ids for ids in (vec_ids, bm25_ids) if ids is not None], k=rrf_k)
         if not fused:
             return []
 
@@ -387,7 +396,8 @@ class HybridRetriever:
 
         rerank_input = [(cid, candidates[cid][0].content)
                         for cid, _ in ordered if cid in candidates]
-        reranked = self.reranker.rerank(query, rerank_input) if rerank_input else None
+        reranked = (self.reranker.rerank(query, rerank_input)
+                    if (use_rerank and rerank_input) else None)
         rerank_used = reranked is not None
 
         if rerank_used:
@@ -411,8 +421,9 @@ class HybridRetriever:
             ))
 
         chunks = self._apply_personal_slots(chunks, scope, top_k)
-        payload = [c.to_dict() for c in chunks]
-        self._cache_set(cache_key, payload, int(_cfg('RAG_CACHE_TTL', 600)))
+        if baseline:
+            payload = [c.to_dict() for c in chunks]
+            self._cache_set(cache_key, payload, int(_cfg('RAG_CACHE_TTL', 600)))
         return chunks
 
     def _apply_personal_slots(self, chunks, scope, top_k):
